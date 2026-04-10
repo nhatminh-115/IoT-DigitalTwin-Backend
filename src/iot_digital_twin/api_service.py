@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+import logging
 import os
 from pathlib import Path
 import threading
@@ -19,6 +20,9 @@ from .data_fetcher import DataFetchError, DataFetcher, DataFetcherConfig
 from .data_quality_gate import DataQualityError, DataQualityGate
 from .predictor import DeepTimeSeriesPredictor, PredictorConfig, PredictorError
 from .anomaly_detector import AnomalyDetector
+from .llm_service import AIAssistant
+
+logger = logging.getLogger(__name__)
 
 
 class ApiServiceError(RuntimeError):
@@ -171,6 +175,21 @@ class InferenceAPIService:
         self._credentials_ready = threading.Event()
         if self._bot_token and self._chat_id:
             self._credentials_ready.set()
+
+        # AI assistant — non-fatal: bot works even if Groq is unavailable.
+        self._ai_assistant: AIAssistant | None = None
+        try:
+            groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+            if groq_key:
+                self._ai_assistant = AIAssistant(
+                    groq_api_key=groq_key,
+                    get_df=lambda: self._cached_clean_df,
+                )
+                logger.info("AIAssistant initialized successfully.")
+            else:
+                logger.warning("AIAssistant skipped: GROQ_API_KEY not set.")
+        except Exception as exc:
+            logger.warning("AIAssistant init failed (non-fatal): %s", exc)
 
         self._bg_thread = threading.Thread(
             target=self._background_fetch_loop, daemon=True, name="bg-fetch"
@@ -374,6 +393,11 @@ class InferenceAPIService:
                             self._handle_telegram_command("short", target_chat_id=chat_id)
                         elif text.startswith("/getcurrent_alert"):
                             self._handle_telegram_command("alert", target_chat_id=chat_id)
+                        elif text.startswith("/ask"):
+                            # Use original (non-lowercased) text to preserve Vietnamese diacritics.
+                            original_text = msg_node["text"]
+                            query = original_text[len("/ask"):].strip()
+                            self._handle_ask_command(query, target_chat_id=chat_id)
 
             except Exception as exc:
                 print(f"Telegram polling error: {exc}")
@@ -426,6 +450,33 @@ class InferenceAPIService:
                     "<pre>" + "\n".join(_build_alert_lines(breaches)) + "</pre>"
                 )
             self._send_telegram_message(msg, target_chat_id)
+
+    def _handle_ask_command(self, query: str, target_chat_id: str) -> None:
+        if not query:
+            self._send_telegram_message(
+                "[AI] Vui lòng nhập câu hỏi sau lệnh /ask.\n"
+                "Ví dụ: /ask Nhiệt độ M1 hiện tại có ổn không?",
+                target_chat_id,
+            )
+            return
+
+        if self._ai_assistant is None:
+            self._send_telegram_message(
+                "[AI] Trợ lý AI chưa được kích hoạt. "
+                "Kiểm tra biến môi trường GROQ_API_KEY, SUPABASE_URL, SUPABASE_KEY.",
+                target_chat_id,
+            )
+            return
+
+        try:
+            answer = self._ai_assistant.answer(query)
+            self._send_telegram_message(f"[AI] {answer}", target_chat_id)
+        except Exception as exc:
+            logger.error("AIAssistant.answer failed: %s", exc)
+            self._send_telegram_message(
+                f"[AI] Lỗi khi xử lý câu hỏi: {exc}",
+                target_chat_id,
+            )
 
     def health(self) -> dict[str, Any]:
         """Returns runtime health information for service monitoring."""

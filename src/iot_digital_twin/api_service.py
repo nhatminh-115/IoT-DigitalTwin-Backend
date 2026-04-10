@@ -48,10 +48,10 @@ _SENSOR_THRESHOLDS: dict[str, _Threshold] = {
     "_TVOC":  _Threshold(lo=None,   hi=300.0,  lo_reason="",                               hi_reason="Hazardous TVOC detected"),
 }
 
-# Number of 5-minute readings that constitute one day (288 = 24 h × 12 readings/h).
-_DAY_ROWS: int = 288
-_HOUR_ROWS: int = 12
-_WEEK_ROWS: int = 2016
+# Number of 3-minute readings per window (3-min cadence from HomeAssistant).
+_DAY_ROWS: int = 480   # 24 h × 20 readings/h
+_HOUR_ROWS: int = 20   # 60 min / 3 min
+_WEEK_ROWS: int = 3360 # 7 × 480
 
 # Cooldown between repeated alerts for the same sensor channel (seconds).
 _ALERT_COOLDOWN_SECONDS: float = 3600.0
@@ -128,7 +128,7 @@ class ApiServiceConfig:
 
     csv_url: str
     checkpoint_path: Path
-    train_tail_rows: int = 720
+    train_tail_rows: int = 1200  # ~60 h at 3-min cadence
 
 
 class InferenceAPIService:

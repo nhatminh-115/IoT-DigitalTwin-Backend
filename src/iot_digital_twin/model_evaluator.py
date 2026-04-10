@@ -36,7 +36,7 @@ class EvaluationArtifacts:
 class ModelEvaluator:
     """Builds long-term robustness metrics for multivariate forecasters."""
 
-    def __init__(self, rolling_window: int = 20, ci_z_value: float = 1.96) -> None:
+    def __init__(self, rolling_window: int = 30, ci_z_value: float = 1.96) -> None:  # ~90 min at 3-min cadence
         """Initializes evaluation hyperparameters.
 
         Args:

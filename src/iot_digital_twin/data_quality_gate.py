@@ -55,8 +55,8 @@ class DataQualityGate:
         self,
         zscore_threshold: float = 3.0,
         flatline_variance_epsilon: float = 1e-4,
-        flatline_window_size: int = 12,
-        min_required_rows: int = 24,
+        flatline_window_size: int = 20,  # ~60 min at 3-min cadence
+        min_required_rows: int = 40,     # ~2 h at 3-min cadence
     ) -> None:
         """Initializes gate thresholds.
 

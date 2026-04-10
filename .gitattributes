@@ -1,0 +1,5 @@
+artifacts/*.pt filter=lfs diff=lfs merge=lfs -text
+artifacts/*.weights filter=lfs diff=lfs merge=lfs -text
+artifacts/*.bin filter=lfs diff=lfs merge=lfs -text
+artifacts/*.h5 filter=lfs diff=lfs merge=lfs -text
+artifacts/*.onnx filter=lfs diff=lfs merge=lfs -text

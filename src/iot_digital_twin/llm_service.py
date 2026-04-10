@@ -5,14 +5,11 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
-
-_ICT = timezone(timedelta(hours=7))
 
 _THRESHOLD_CONTEXT = """
 Safety thresholds for UEH Campus V:
@@ -155,9 +152,8 @@ class SheetContextFetcher:
         for ts, row in tail.iterrows():
             try:
                 ts_dt = pd.Timestamp(ts)
-                if ts_dt.tzinfo is None:
-                    ts_dt = ts_dt.tz_localize("UTC")
-                ts_str = ts_dt.tz_convert(_ICT).strftime("%d/%m %H:%M")
+                # HomeAssistant writes ICT timestamps directly — no conversion needed.
+                ts_str = ts_dt.strftime("%d/%m %H:%M")
             except Exception:
                 ts_str = str(ts)[:16]
 

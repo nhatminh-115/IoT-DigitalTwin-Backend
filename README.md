@@ -3,9 +3,7 @@ title: IoT Digital Twin Dashboard
 emoji: 🏭
 colorFrom: indigo
 colorTo: blue
-sdk: streamlit
-sdk_version: "1.39.0"
-python_version: "3.11"
+sdk: docker
 app_file: app.py
 pinned: false
 ---

@@ -969,14 +969,13 @@ class InferenceAPIService:
             elif kind == "heatmap":
                 metric = groups[0]
                 root   = Path(__file__).parent.parent.parent
-                campus_buf = viz_engine.heatmap(
-                    df, metric,
-                    coords_path=root / "node_coords_v0.json",
-                    image_path=root / "campus_3d.png",
-                )
-                self._send_telegram_photo(campus_buf, f"/heatmap_{metric} — Campus Overlay", target_chat_id)
-                grid_buf = viz_engine.heatmap_grid(df, metric)
-                self._send_telegram_photo(grid_buf, f"/heatmap_{metric} — Floor Plan", target_chat_id)
+                views = [
+                    (root / "node_coords_v0.json", root / "campus_3d.png"),
+                    (root / "node_coords_v1.json", root / "campus_3d_1.png"),
+                ]
+                for coords, image in views:
+                    v_buf = viz_engine.heatmap(df, metric, coords, image)
+                    self._send_telegram_photo(v_buf, f"/heatmap_{metric}", target_chat_id)
                 buf = None
                 caption = ""
 

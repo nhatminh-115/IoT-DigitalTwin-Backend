@@ -199,7 +199,7 @@ class StreamlitDashboard:
 
         # Top action bar
         btn_col, _, settings_col = st.columns([1, 6, 2])
-        if btn_col.button("Refresh now", use_container_width=True):
+        if btn_col.button("Refresh now", width="stretch"):
             st.rerun()
 
         # Collapsible settings — defaults are sane, most users never touch this
@@ -480,7 +480,7 @@ class StreamlitDashboard:
                     fig.update_yaxes(title_text="Value", title_font=dict(size=10))
 
                     with cols[col_idx]:
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width="stretch")
 
     @staticmethod
     def _infer_sampling_delta(index: pd.Index) -> pd.Timedelta:
@@ -507,7 +507,7 @@ class StreamlitDashboard:
         ))
         self._apply_chart_theme(fig, height=300)
         fig.update_yaxes(title_text="Error", title_font=dict(size=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     def _render_feature_rolling_error_chart(
         self,
@@ -542,7 +542,7 @@ class StreamlitDashboard:
 
         self._apply_chart_theme(fig, height=320)
         fig.update_yaxes(title_text="Rolling Error", title_font=dict(size=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     def _render_residual_histogram(
         self,
@@ -562,7 +562,7 @@ class StreamlitDashboard:
         fig.update_layout(barmode="overlay")
         fig.update_xaxes(title_text="Residual  e = y − ŷ", title_font=dict(size=10))
         fig.update_yaxes(title_text="Frequency", title_font=dict(size=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption(
             "Near-Gaussian residuals centered near zero indicate the model has captured "
             "most systematic temporal structure; remaining error approximates white noise."
@@ -602,7 +602,7 @@ class StreamlitDashboard:
             log_tail = log_tail.drop(columns=["ground_truth_matched"])
 
         st.caption(f"Showing {min(rows_to_show, len(log_tail))} of {len(log_df)} rows · {self.prediction_log_path.as_posix()}")
-        st.dataframe(log_tail, use_container_width=True)
+        st.dataframe(log_tail, width="stretch")
 
     # -------------------------------------------------------------------------
     # Checkpoint handling

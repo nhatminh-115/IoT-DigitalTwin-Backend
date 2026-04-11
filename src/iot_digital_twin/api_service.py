@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import hashlib
 import io
 import logging
@@ -26,6 +26,7 @@ from .predictor import DeepTimeSeriesPredictor, PredictorConfig, PredictorError
 from .anomaly_detector import AnomalyDetector
 from .llm_service import AIAssistant
 from . import viz_engine
+from .video_generator import generate_video, video_path, CSV_URL as _VIDEO_CSV_URL
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,9 @@ class InferenceAPIService:
         self._bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
         self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
+        # Daily video generation — tracks last generated date to avoid duplicates.
+        self._last_video_date: date | None = None
+
         # Mutable alert state accessed only from _bg_thread — no lock needed.
         self._active_breaches: set[str] = set()
         self._alert_buffer: list[tuple[str, float, str]] = []  # (col, val, reason)
@@ -282,6 +286,7 @@ class InferenceAPIService:
                 self._check_and_send_alerts(clean_df)
                 self._check_and_send_hourly_report(clean_df)
                 self._check_autoencoder_anomaly(clean_df)
+                self._check_and_generate_daily_video()
 
             except Exception as exc:
                 with self._lock:
@@ -364,6 +369,28 @@ class InferenceAPIService:
             )
         except Exception as exc:
             logger.error("sendPhoto failed: %s", exc)
+
+    def _send_telegram_video(
+        self,
+        video_file: Path,
+        caption: str,
+        target_chat_id: str,
+    ) -> None:
+        """Send a local MP4 file via Telegram sendVideo."""
+        if not self._bot_token:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self._bot_token}/sendVideo"
+            with video_file.open("rb") as f:
+                requests.post(
+                    url,
+                    data={"chat_id": target_chat_id, "caption": caption,
+                          "supports_streaming": "true"},
+                    files={"video": (video_file.name, f, "video/mp4")},
+                    timeout=120,
+                )
+        except Exception as exc:
+            logger.error("sendVideo failed: %s", exc)
 
     def _send_inline_keyboard(
         self,
@@ -597,6 +624,81 @@ class InferenceAPIService:
             "reason": top,
         })
 
+    def _check_and_generate_daily_video(self) -> None:
+        """Trigger daily video generation at 00:10 ICT. Fire-and-forget thread."""
+        now = _now_ict()
+        if now.hour != 0 or now.minute < 10 or now.minute >= 15:
+            return
+        yesterday = (now - timedelta(days=1)).date()
+        with self._lock:
+            if self._last_video_date == yesterday:
+                return
+            self._last_video_date = yesterday
+
+        def _run() -> None:
+            try:
+                out = generate_video(target_date=yesterday, csv_url=_VIDEO_CSV_URL)
+                caption = (
+                    f"<b>Daily Heatmap — {yesterday.strftime('%d/%m/%Y')}</b>\n"
+                    f"Temp · Humid · CO2 · TVOC  |  48 frames"
+                )
+                self._send_telegram_video(out, caption, self._chat_id)
+            except Exception as exc:
+                logger.error("Daily video generation failed: %s", exc)
+                self._send_telegram_message(
+                    f"[VIDEO] Daily video generation failed: {exc}", self._chat_id
+                )
+
+        threading.Thread(target=_run, daemon=True, name="daily-video").start()
+
+    def _handle_video_command(
+        self,
+        arg: str,
+        target_chat_id: str,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> None:
+        """Handle /video [YYYY-MM-DD] — serve cached video or generate on demand."""
+        if arg:
+            try:
+                target = date.fromisoformat(arg.strip())
+            except ValueError:
+                self._send_telegram_message(
+                    "Invalid date format. Use /video or /video YYYY-MM-DD",
+                    target_chat_id,
+                )
+                return
+        else:
+            target = (_now_ict() - timedelta(days=1)).date()
+
+        cached = video_path(target)
+        if cached.exists():
+            caption = (
+                f"<b>Daily Heatmap — {target.strftime('%d/%m/%Y')}</b>\n"
+                f"Temp · Humid · CO2 · TVOC  |  48 frames"
+            )
+            self._send_telegram_video(cached, caption, target_chat_id)
+            return
+
+        self._send_telegram_message(
+            f"Generating video for {target} — this takes a minute...",
+            target_chat_id,
+        )
+
+        def _run() -> None:
+            try:
+                out = generate_video(target_date=target, csv_url=_VIDEO_CSV_URL)
+                caption = (
+                    f"<b>Daily Heatmap — {target.strftime('%d/%m/%Y')}</b>\n"
+                    f"Temp · Humid · CO2 · TVOC  |  48 frames"
+                )
+                self._send_telegram_video(out, caption, target_chat_id)
+            except Exception as exc:
+                logger.error("On-demand video failed: %s", exc)
+                self._send_telegram_message(f"[VIDEO] Generation failed: {exc}", target_chat_id)
+
+        threading.Thread(target=_run, daemon=True, name="ondemand-video").start()
+
     def _telegram_polling_loop(self) -> None:
         """Long-polls the Telegram Bot API and dispatches incoming commands.
 
@@ -654,6 +756,9 @@ class InferenceAPIService:
                         elif text.startswith("/ask"):
                             query = raw_text.split("@")[0][len("/ask"):].strip()
                             self._handle_ask_command(query, **ctx)
+                        elif text.startswith("/video"):
+                            arg = raw_text.split("@")[0][len("/video"):].strip()
+                            self._handle_video_command(arg, **ctx)
                         else:
                             self._dispatch_viz_command(text, **ctx)
 

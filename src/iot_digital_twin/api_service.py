@@ -621,7 +621,10 @@ class InferenceAPIService:
                         if not (msg_node and "text" in msg_node):
                             continue
 
-                        text = msg_node["text"].lower()
+                        # Strip @botname suffix added by Telegram command menu autocomplete
+                        # e.g. "/compare@UEH_V_DigitalTwin_bot" → "/compare"
+                        raw_text = msg_node["text"]
+                        text = raw_text.split("@")[0].lower() if raw_text.startswith("/") else raw_text.lower()
                         chat_id = str(msg_node["chat"]["id"])
                         sender = msg_node.get("from") or {}
                         user_id = str(sender.get("id", "")) or None
@@ -636,8 +639,7 @@ class InferenceAPIService:
                         elif text.startswith("/getcurrent_alert"):
                             self._handle_telegram_command("alert", **ctx)
                         elif text.startswith("/ask"):
-                            original_text = msg_node["text"]
-                            query = original_text[len("/ask"):].strip()
+                            query = raw_text.split("@")[0][len("/ask"):].strip()
                             self._handle_ask_command(query, **ctx)
                         else:
                             self._dispatch_viz_command(text, **ctx)
@@ -926,10 +928,15 @@ class InferenceAPIService:
             elif kind == "heatmap":
                 metric = groups[0]
                 root = Path(__file__).parent.parent.parent
-                coords = root / "node_coords_v1.json"
-                image  = root / "campus_3d_1.png"
-                buf = viz_engine.heatmap(df, metric, coords, image)
-                caption = f"/heatmap_{metric}"
+                views = [
+                    (root / "node_coords_v0.json", root / "campus_3d.png"),
+                    (root / "node_coords_v1.json", root / "campus_3d_1.png"),
+                ]
+                for coords, image in views:
+                    v_buf = viz_engine.heatmap(df, metric, coords, image)
+                    self._send_telegram_photo(v_buf, f"/heatmap_{metric}", target_chat_id)
+                buf = None
+                caption = ""
 
             elif kind == "compare":
                 node_a, node_b = groups[0].upper(), groups[1].upper()

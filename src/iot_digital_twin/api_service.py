@@ -57,6 +57,15 @@ _WEEK_ROWS: int = 3360 # 7 × 480
 # Cooldown between repeated alerts for the same sensor channel (seconds).
 _ALERT_COOLDOWN_SECONDS: float = 3600.0
 
+_HYSTERESIS_MARGIN: dict[str, float] = {
+    "_Temp":  0.5,
+    "_Humid": 2.0,
+    "_CO2":   50.0,
+    "_TVOC":  20.0,
+}
+_PERSISTENT_REALERT_SECONDS: float = 43200.0   # 12 hours
+_ALERT_BUFFER_WINDOW_SECONDS: float = 120.0    # 2 minutes
+
 _ICT = timezone(timedelta(hours=7))
 
 NODE_ORDER = ["M1", "M4", "M6", "M7", "M8", "M9", "M10", "M11"]
@@ -158,8 +167,13 @@ class InferenceAPIService:
         self._bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
         self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
-        # All mutable alert state is protected by _lock.
-        self._alert_cooldowns: dict[str, float] = {}
+        # Mutable alert state accessed only from _bg_thread — no lock needed.
+        self._active_breaches: set[str] = set()
+        self._alert_buffer: list[tuple[str, float, str]] = []  # (col, val, reason)
+        self._buffer_flush_at: float = 0.0
+        self._persistent_alert_sent_at: dict[str, float] = {}
+
+        # Protected by _lock.
         self._last_report_hour: int = -1
 
         self._checkpoint_checked = False
@@ -333,39 +347,85 @@ class InferenceAPIService:
         if clean_df.empty or not self._bot_token:
             return
 
-        latest   = clean_df.iloc[-1]
-        now      = time.monotonic()
+        latest = clean_df.iloc[-1]
+        now_mono = time.monotonic()
         breaches = self._evaluate_sensor_alerts(latest)
+        current_breach_cols = {col for col, _, _ in breaches}
 
-        alert_lines: list[str] = []
-        logged_breaches: list[tuple[str, float, str]] = []
-        with self._lock:
-            for col, val, reason in breaches:
-                last_sent = self._alert_cooldowns.get(col, 0.0)
-                if now - last_sent > _ALERT_COOLDOWN_SECONDS:
-                    self._alert_cooldowns[col] = now
-                    parts  = col.split("_", 1)
-                    node   = parts[0] if len(parts) == 2 else col
-                    metric = parts[1] if len(parts) == 2 else ""
-                    alert_lines.append(f"  {node:<5} {metric:<6} {val:.0f}  ({reason})")
-                    logged_breaches.append((node, metric, val, reason))
+        # Always log every breach to Supabase regardless of Telegram state.
+        for col, val, reason in breaches:
+            parts = col.split("_", 1)
+            node = parts[0] if len(parts) == 2 else col
+            metric = parts[1] if len(parts) == 2 else ""
+            threshold_type = "HIGH" if ">" in reason or "exceeded" in reason.lower() else "LOW"
+            self._log_to_supabase("alert_logs", {
+                "node_id": node,
+                "metric": metric,
+                "value": val,
+                "threshold_type": threshold_type,
+                "reason": reason,
+            })
 
-        if alert_lines:
-            dt  = _now_ict()
-            msg = (
-                f"<b>[ALERT] UEH Campus V \u2014 {_fmt_ts(dt)}</b>\n"
-                "<pre>" + "\n".join(alert_lines) + "</pre>"
+        # Categorise each current breach as new or persistent.
+        for col, val, reason in breaches:
+            if col not in self._active_breaches:
+                self._active_breaches.add(col)
+                self._persistent_alert_sent_at[col] = now_mono
+                self._alert_buffer.append((col, val, reason))
+                if self._buffer_flush_at == 0.0:
+                    self._buffer_flush_at = now_mono + _ALERT_BUFFER_WINDOW_SECONDS
+            else:
+                last_sent = self._persistent_alert_sent_at.get(col, 0.0)
+                if now_mono - last_sent > _PERSISTENT_REALERT_SECONDS:
+                    self._persistent_alert_sent_at[col] = now_mono
+                    self._alert_buffer.append((col, val, "\x00" + reason))  # \x00 = reminder marker
+                    if self._buffer_flush_at == 0.0:
+                        self._buffer_flush_at = now_mono + _ALERT_BUFFER_WINDOW_SECONDS
+
+        # Resolve breaches that are no longer detected, with hysteresis.
+        for col in list(self._active_breaches - current_breach_cols):
+            suffix = next((s for s in _HYSTERESIS_MARGIN if col.endswith(s)), None)
+            if suffix is None:
+                self._active_breaches.discard(col)
+                self._persistent_alert_sent_at.pop(col, None)
+                continue
+            raw = latest.get(col)
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                self._active_breaches.discard(col)
+                self._persistent_alert_sent_at.pop(col, None)
+                continue
+            val_f = float(raw)
+            margin = _HYSTERESIS_MARGIN[suffix]
+            thresh = _SENSOR_THRESHOLDS[suffix]
+            in_hysteresis = (
+                (thresh.hi is not None and val_f > thresh.hi - margin)
+                or (thresh.lo is not None and val_f < thresh.lo + margin)
             )
-            self._send_telegram_message(msg)
-            for node, metric, val, reason in logged_breaches:
-                threshold_type = "HIGH" if ">" in reason or "exceeded" in reason.lower() else "LOW"
-                self._log_to_supabase("alert_logs", {
-                    "node_id": node,
-                    "metric": metric,
-                    "value": val,
-                    "threshold_type": threshold_type,
-                    "reason": reason,
-                })
+            if not in_hysteresis:
+                self._active_breaches.discard(col)
+                self._persistent_alert_sent_at.pop(col, None)
+
+        # Flush buffer once the window expires.
+        if self._alert_buffer and self._buffer_flush_at > 0.0 and now_mono >= self._buffer_flush_at:
+            new_items = [(c, v, r) for c, v, r in self._alert_buffer if not r.startswith("\x00")]
+            reminder_items = [(c, v, r[1:]) for c, v, r in self._alert_buffer if r.startswith("\x00")]
+            dt = _now_ict()
+            if new_items:
+                lines = _build_alert_lines(new_items)
+                msg = (
+                    f"<b>[ALERT] UEH Campus V \u2014 {_fmt_ts(dt)}</b>\n"
+                    "<pre>" + "\n".join(lines) + "</pre>"
+                )
+                self._send_telegram_message(msg)
+            if reminder_items:
+                lines = _build_alert_lines(reminder_items)
+                msg = (
+                    f"<b>[REMINDER] V\u1eabn c\u00f2n anomaly sau 12h \u2014 {_fmt_ts(dt)}</b>\n"
+                    "<pre>" + "\n".join(lines) + "</pre>"
+                )
+                self._send_telegram_message(msg)
+            self._alert_buffer.clear()
+            self._buffer_flush_at = 0.0
 
     def _check_and_send_hourly_report(self, clean_df: pd.DataFrame) -> None:
         if clean_df.empty or not self._bot_token:
@@ -389,6 +449,9 @@ class InferenceAPIService:
             f"{status}\n\n"
             "<pre>" + table + "</pre>"
         )
+        if breaches:
+            active_lines = _build_alert_lines(breaches)
+            msg += "\n<b>Active alerts:</b>\n<pre>" + "\n".join(active_lines) + "</pre>"
         self._send_telegram_message(msg)
 
     def _check_autoencoder_anomaly(self, clean_df: pd.DataFrame) -> None:

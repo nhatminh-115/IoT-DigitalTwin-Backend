@@ -101,8 +101,11 @@ def _fmt_val(v: float | None, decimals: int = 1) -> str:
     return f"{v:.{decimals}f}"
 
 
-def _build_node_table(latest: pd.Series, df_columns: list[str]) -> str:
-    header  = f"{'Node':<6} {'Temp':>6} {'Hum':>6} {'CO2':>6} {'TVOC':>6}"
+def _build_node_table(latest: pd.Series, df_columns: list[str], show_names: bool = False) -> str:
+    if show_names:
+        header  = f"{'Node':<6} {'Location':<16} {'Temp':>6} {'Hum':>6} {'CO2':>6} {'TVOC':>6}"
+    else:
+        header  = f"{'Node':<6} {'Temp':>6} {'Hum':>6} {'CO2':>6} {'TVOC':>6}"
     divider = "-" * len(header)
     rows    = [header, divider]
 
@@ -121,13 +124,23 @@ def _build_node_table(latest: pd.Series, df_columns: list[str]) -> str:
         co2  = get("_CO2")
         tvoc = get("_TVOC")
 
-        if all(v is None for v in (temp, hum, co2, tvoc)):
-            rows.append(f"{node:<6} {'--':>6} {'--':>6} {'--':>6} {'--':>6}")
+        if show_names:
+            name = NODE_NAMES.get(node, "")
+            if all(v is None for v in (temp, hum, co2, tvoc)):
+                rows.append(f"{node:<6} {name:<16} {'--':>6} {'--':>6} {'--':>6} {'--':>6}")
+            else:
+                rows.append(
+                    f"{node:<6} {name:<16} {_fmt_val(temp):>6} {_fmt_val(hum):>6}"
+                    f" {_fmt_val(co2, 0):>6} {_fmt_val(tvoc, 1):>6}"
+                )
         else:
-            rows.append(
-                f"{node:<6} {_fmt_val(temp):>6} {_fmt_val(hum):>6}"
-                f" {_fmt_val(co2, 0):>6} {_fmt_val(tvoc, 1):>6}"
-            )
+            if all(v is None for v in (temp, hum, co2, tvoc)):
+                rows.append(f"{node:<6} {'--':>6} {'--':>6} {'--':>6} {'--':>6}")
+            else:
+                rows.append(
+                    f"{node:<6} {_fmt_val(temp):>6} {_fmt_val(hum):>6}"
+                    f" {_fmt_val(co2, 0):>6} {_fmt_val(tvoc, 1):>6}"
+                )
     return "\n".join(rows)
 
 
@@ -1042,11 +1055,15 @@ class InferenceAPIService:
         msg: str
 
         if cmd_type == "detail":
-            table = _build_node_table(latest, list(df.columns))
+            table  = _build_node_table(latest, list(df.columns), show_names=True)
+            status = f"Anomalies: <b>{len(breaches)}</b>" if breaches else "Status: <b>NORMAL</b>"
             msg = (
-                f"<b>[DETAIL] {_fmt_ts(dt)}</b>\n\n"
+                f"<b>[DETAIL] {_fmt_ts(dt)}</b>\n"
+                f"{status}\n\n"
                 "<pre>" + table + "</pre>"
             )
+            if breaches:
+                msg += "\n<b>Active alerts:</b>\n<pre>" + "\n".join(_build_alert_lines(breaches)) + "</pre>"
             self._send_telegram_message(msg, target_chat_id)
 
         elif cmd_type == "short":

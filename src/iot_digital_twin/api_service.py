@@ -519,7 +519,7 @@ class InferenceAPIService:
                         chat_id = str(msg_node["chat"]["id"])
                         sender = msg_node.get("from") or {}
                         user_id = str(sender.get("id", "")) or None
-                        username = sender.get("username") or None
+                        username = sender.get("username") or sender.get("first_name") or None
 
                         if text.startswith("/getcurrent_detail"):
                             self._handle_telegram_command("detail", target_chat_id=chat_id, user_id=user_id, username=username)
@@ -603,7 +603,7 @@ class InferenceAPIService:
             "chat_id": target_chat_id,
             "command": cmd_type,
             "query": None,
-            "response": None,
+            "response": msg,
             "model": None,
             "input_tokens": 0,
             "output_tokens": 0,

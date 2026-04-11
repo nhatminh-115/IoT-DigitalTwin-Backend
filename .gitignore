@@ -9,4 +9,5 @@ Thumbs.db
 artifacts/*.csv
 !artifacts/prediction_log.csv
 test_ae.py
-# Add other temporary or local files here
+*.png
+.claude/

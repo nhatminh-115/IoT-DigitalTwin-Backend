@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -168,6 +169,20 @@ class InferenceAPIService:
 
         self._cached_clean_df: pd.DataFrame | None = None
 
+        # Supabase logging client — non-fatal; None disables all logging.
+        self._supabase = None
+        try:
+            supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+            supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+            if supabase_url and supabase_key:
+                from supabase import create_client
+                self._supabase = create_client(supabase_url, supabase_key)
+                logger.info("Supabase logging client initialized.")
+            else:
+                logger.warning("Supabase logging disabled: SUPABASE_URL or SUPABASE_SERVICE_KEY not set.")
+        except Exception as exc:
+            logger.warning("Supabase logging init failed (non-fatal): %s", exc)
+
         # Signals background threads to stop gracefully on shutdown.
         self._stop_event = threading.Event()
 
@@ -206,6 +221,7 @@ class InferenceAPIService:
 
         Runs on a daemon thread. Exits cleanly when ``_stop_event`` is set.
         """
+        _heartbeat_counter = 0
         while not self._stop_event.is_set():
             try:
                 raw_df = self._fetcher.fetch()
@@ -229,8 +245,42 @@ class InferenceAPIService:
                 with self._lock:
                     self._last_error = f"Background Fetch Error: {exc}"
 
+            # Upsert system heartbeat every 10 iterations (~5 minutes at 30s cadence).
+            _heartbeat_counter += 1
+            if _heartbeat_counter >= 10:
+                _heartbeat_counter = 0
+                with self._lock:
+                    _last_err = self._last_error
+                def _upsert_heartbeat(last_error: str | None) -> None:
+                    try:
+                        if self._supabase is None:
+                            return
+                        self._supabase.table("system_heartbeat").upsert(
+                            {
+                                "id": 1,
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                                "status": "ok",
+                                "last_error": last_error,
+                            },
+                            on_conflict="id",
+                        ).execute()
+                    except Exception:
+                        pass
+                threading.Thread(target=_upsert_heartbeat, args=(_last_err,), daemon=True).start()
+
             # Throttle to prevent rate-limits from Google Sheets.
             self._stop_event.wait(timeout=30.0)
+
+    def _log_to_supabase(self, table: str, record: dict) -> None:
+        """Fire-and-forget insert to Supabase. Errors are swallowed silently."""
+        if self._supabase is None:
+            return
+        def _insert() -> None:
+            try:
+                self._supabase.table(table).insert(record).execute()
+            except Exception:
+                pass
+        threading.Thread(target=_insert, daemon=True).start()
 
     def _send_telegram_message(self, text: str, target_chat_id: str | None = None) -> None:
         """Sends a message via the Telegram Bot API.
@@ -288,6 +338,7 @@ class InferenceAPIService:
         breaches = self._evaluate_sensor_alerts(latest)
 
         alert_lines: list[str] = []
+        logged_breaches: list[tuple[str, float, str]] = []
         with self._lock:
             for col, val, reason in breaches:
                 last_sent = self._alert_cooldowns.get(col, 0.0)
@@ -297,6 +348,7 @@ class InferenceAPIService:
                     node   = parts[0] if len(parts) == 2 else col
                     metric = parts[1] if len(parts) == 2 else ""
                     alert_lines.append(f"  {node:<5} {metric:<6} {val:.0f}  ({reason})")
+                    logged_breaches.append((node, metric, val, reason))
 
         if alert_lines:
             dt  = _now_ict()
@@ -305,6 +357,15 @@ class InferenceAPIService:
                 "<pre>" + "\n".join(alert_lines) + "</pre>"
             )
             self._send_telegram_message(msg)
+            for node, metric, val, reason in logged_breaches:
+                threshold_type = "HIGH" if ">" in reason or "exceeded" in reason.lower() else "LOW"
+                self._log_to_supabase("alert_logs", {
+                    "node_id": node,
+                    "metric": metric,
+                    "value": val,
+                    "threshold_type": threshold_type,
+                    "reason": reason,
+                })
 
     def _check_and_send_hourly_report(self, clean_df: pd.DataFrame) -> None:
         if clean_df.empty or not self._bot_token:
@@ -352,6 +413,13 @@ class InferenceAPIService:
             f"<pre>{top}</pre>"
         )
         self._send_telegram_message(msg)
+        self._log_to_supabase("alert_logs", {
+            "node_id": None,
+            "metric": "MULTIVARIATE",
+            "value": result.reconstruction_error,
+            "threshold_type": "AE",
+            "reason": top,
+        })
 
     def _telegram_polling_loop(self) -> None:
         """Long-polls the Telegram Bot API and dispatches incoming commands.
@@ -386,24 +454,34 @@ class InferenceAPIService:
 
                         text = msg_node["text"].lower()
                         chat_id = str(msg_node["chat"]["id"])
+                        sender = msg_node.get("from") or {}
+                        user_id = str(sender.get("id", "")) or None
+                        username = sender.get("username") or None
 
                         if text.startswith("/getcurrent_detail"):
-                            self._handle_telegram_command("detail", target_chat_id=chat_id)
+                            self._handle_telegram_command("detail", target_chat_id=chat_id, user_id=user_id, username=username)
                         elif text.startswith("/getcurrent_short"):
-                            self._handle_telegram_command("short", target_chat_id=chat_id)
+                            self._handle_telegram_command("short", target_chat_id=chat_id, user_id=user_id, username=username)
                         elif text.startswith("/getcurrent_alert"):
-                            self._handle_telegram_command("alert", target_chat_id=chat_id)
+                            self._handle_telegram_command("alert", target_chat_id=chat_id, user_id=user_id, username=username)
                         elif text.startswith("/ask"):
                             # Use original (non-lowercased) text to preserve Vietnamese diacritics.
                             original_text = msg_node["text"]
                             query = original_text[len("/ask"):].strip()
-                            self._handle_ask_command(query, target_chat_id=chat_id)
+                            self._handle_ask_command(query, target_chat_id=chat_id, user_id=user_id, username=username)
 
             except Exception as exc:
                 print(f"Telegram polling error: {exc}")
                 self._stop_event.wait(timeout=5.0)
 
-    def _handle_telegram_command(self, cmd_type: str, target_chat_id: str) -> None:
+    def _handle_telegram_command(
+        self,
+        cmd_type: str,
+        target_chat_id: str,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> None:
+        start_time = time.monotonic()
         with self._lock:
             df = self._cached_clean_df
 
@@ -417,6 +495,7 @@ class InferenceAPIService:
         latest   = df.iloc[-1]
         dt       = _now_ict()
         breaches = self._evaluate_sensor_alerts(latest)
+        msg: str
 
         if cmd_type == "detail":
             table = _build_node_table(latest, list(df.columns))
@@ -450,8 +529,33 @@ class InferenceAPIService:
                     "<pre>" + "\n".join(_build_alert_lines(breaches)) + "</pre>"
                 )
             self._send_telegram_message(msg, target_chat_id)
+        else:
+            return
 
-    def _handle_ask_command(self, query: str, target_chat_id: str) -> None:
+        latency_ms = int((time.monotonic() - start_time) * 1000)
+        username_hash = hashlib.sha256(username.encode()).hexdigest()[:16] if username else None
+        self._log_to_supabase("bot_logs", {
+            "user_id": user_id,
+            "username_hash": username_hash,
+            "chat_id": target_chat_id,
+            "command": cmd_type,
+            "query": None,
+            "response": None,
+            "model": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "latency_ms": latency_ms,
+            "is_cached": False,
+        })
+
+    def _handle_ask_command(
+        self,
+        query: str,
+        target_chat_id: str,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> None:
+        start_time = time.monotonic()
         if not query:
             self._send_telegram_message(
                 "[AI] Vui lòng nhập câu hỏi sau lệnh /ask.\n"
@@ -469,8 +573,25 @@ class InferenceAPIService:
             return
 
         try:
-            answer = self._ai_assistant.answer(query)
-            self._send_telegram_message(f"[AI] {answer}", target_chat_id)
+            result = self._ai_assistant.answer(query)
+            answer_text = result["answer"]
+            self._send_telegram_message(f"[AI] {answer_text}", target_chat_id)
+
+            latency_ms = result.get("latency_ms") or int((time.monotonic() - start_time) * 1000)
+            username_hash = hashlib.sha256(username.encode()).hexdigest()[:16] if username else None
+            self._log_to_supabase("bot_logs", {
+                "user_id": user_id,
+                "username_hash": username_hash,
+                "chat_id": target_chat_id,
+                "command": "ask",
+                "query": query,
+                "response": answer_text,
+                "model": result.get("model"),
+                "input_tokens": result.get("input_tokens", 0),
+                "output_tokens": result.get("output_tokens", 0),
+                "latency_ms": latency_ms,
+                "is_cached": result.get("is_cached", False),
+            })
         except Exception as exc:
             logger.error("AIAssistant.answer failed: %s", exc)
             self._send_telegram_message(

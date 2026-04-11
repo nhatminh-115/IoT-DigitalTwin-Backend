@@ -64,11 +64,11 @@ class SemanticCache:
     def _normalize(self, text: str) -> str:
         return text.strip().lower()
 
-    def get(self, query: str) -> str | None:
+    def get(self, query: str) -> tuple[str | None, bool]:
         try:
             from thefuzz import fuzz
         except ImportError:
-            return None
+            return None, False
 
         now = time.monotonic()
         normalized = self._normalize(query)
@@ -88,8 +88,8 @@ class SemanticCache:
         if best_key is not None and best_score >= self._threshold:
             answer, _ = self._store[best_key]
             logger.debug("Cache hit (score=%d): %s", best_score, query[:60])
-            return answer
-        return None
+            return answer, True
+        return None, False
 
     def set(self, query: str, answer: str) -> None:
         key = self._normalize(query)
@@ -303,8 +303,9 @@ class GroqClient:
         except ImportError as exc:
             raise ImportError("groq package is required: pip install groq>=0.9.0") from exc
 
-    def ask(self, user_query: str, context: str) -> str:
+    def ask(self, user_query: str, context: str) -> dict:
         user_message = f"Dữ liệu cảm biến:\n\n{context}\n\nCâu hỏi: {user_query}"
+        t0 = time.monotonic()
         completion = self._client.chat.completions.create(
             model=self._MODEL,
             messages=[
@@ -314,7 +315,15 @@ class GroqClient:
             max_tokens=self._MAX_TOKENS,
             temperature=self._TEMPERATURE,
         )
-        return completion.choices[0].message.content or "(no response)"
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        usage = completion.usage
+        return {
+            "answer": completion.choices[0].message.content or "(no response)",
+            "input_tokens": usage.prompt_tokens if usage else 0,
+            "output_tokens": usage.completion_tokens if usage else 0,
+            "model": self._MODEL,
+            "latency_ms": latency_ms,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -329,11 +338,20 @@ class AIAssistant:
         self._fetcher = SheetContextFetcher(get_df)
         self._llm     = GroqClient(api_key=groq_api_key)
 
-    def answer(self, query: str) -> str:
-        cached = self._cache.get(query)
-        if cached:
-            return cached
+    def answer(self, query: str) -> dict:
+        """Returns dict with answer text and LLM metadata for logging."""
+        cached_text, is_cached = self._cache.get(query)
+        if is_cached and cached_text is not None:
+            return {
+                "answer": cached_text,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "model": GroqClient._MODEL,
+                "latency_ms": 0,
+                "is_cached": True,
+            }
         context = self._fetcher.build_context(query)
-        reply   = self._llm.ask(query, context)
-        self._cache.set(query, reply)
-        return reply
+        result  = self._llm.ask(query, context)
+        self._cache.set(query, result["answer"])
+        result["is_cached"] = False
+        return result

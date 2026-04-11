@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import hashlib
+import io
 import logging
 import os
 from pathlib import Path
+import re
 import threading
 import time
 import urllib.request
@@ -16,12 +18,14 @@ import json
 from typing import Any, NamedTuple
 
 import pandas as pd
+import requests
 
 from .data_fetcher import DataFetchError, DataFetcher, DataFetcherConfig
 from .data_quality_gate import DataQualityError, DataQualityGate
 from .predictor import DeepTimeSeriesPredictor, PredictorConfig, PredictorError
 from .anomaly_detector import AnomalyDetector
 from .llm_service import AIAssistant
+from . import viz_engine
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +320,27 @@ class InferenceAPIService:
         except Exception as exc:
             print(f"Telegram send error: {exc}")
 
+    def _send_telegram_photo(
+        self,
+        buf: io.BytesIO,
+        caption: str,
+        target_chat_id: str,
+    ) -> None:
+        """Sends a photo via the Telegram Bot API using multipart upload."""
+        if not self._bot_token:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self._bot_token}/sendPhoto"
+            buf.seek(0)
+            requests.post(
+                url,
+                data={"chat_id": target_chat_id, "caption": caption, "parse_mode": "HTML"},
+                files={"photo": ("chart.png", buf, "image/png")},
+                timeout=30,
+            )
+        except Exception as exc:
+            logger.error("sendPhoto failed: %s", exc)
+
     # ------------------------------------------------------------------
     # Internal helpers — sensor threshold evaluation
     # ------------------------------------------------------------------
@@ -521,21 +546,176 @@ class InferenceAPIService:
                         user_id = str(sender.get("id", "")) or None
                         username = sender.get("username") or sender.get("first_name") or None
 
+                        ctx = dict(target_chat_id=chat_id, user_id=user_id, username=username)
+
                         if text.startswith("/getcurrent_detail"):
-                            self._handle_telegram_command("detail", target_chat_id=chat_id, user_id=user_id, username=username)
+                            self._handle_telegram_command("detail", **ctx)
                         elif text.startswith("/getcurrent_short"):
-                            self._handle_telegram_command("short", target_chat_id=chat_id, user_id=user_id, username=username)
+                            self._handle_telegram_command("short", **ctx)
                         elif text.startswith("/getcurrent_alert"):
-                            self._handle_telegram_command("alert", target_chat_id=chat_id, user_id=user_id, username=username)
+                            self._handle_telegram_command("alert", **ctx)
                         elif text.startswith("/ask"):
-                            # Use original (non-lowercased) text to preserve Vietnamese diacritics.
                             original_text = msg_node["text"]
                             query = original_text[len("/ask"):].strip()
-                            self._handle_ask_command(query, target_chat_id=chat_id, user_id=user_id, username=username)
+                            self._handle_ask_command(query, **ctx)
+                        else:
+                            self._dispatch_viz_command(text, **ctx)
 
             except Exception as exc:
                 print(f"Telegram polling error: {exc}")
                 self._stop_event.wait(timeout=5.0)
+
+    # ── Regex-based viz dispatcher ─────────────────────────────────────────
+
+    _VIZ_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+        (re.compile(r"^/chart_(hour|day|week)_(temp|humid|co2|tvoc)$"), "chart"),
+        (re.compile(r"^/predict_(m\d+)_(temp|humid|co2|tvoc)$"),        "predict"),
+        (re.compile(r"^/heatmap_(temp|humid|co2|tvoc)$"),               "heatmap"),
+        (re.compile(r"^/compare_(m\d+)_(m\d+)$"),                       "compare"),
+        (re.compile(r"^/rank_(temp|humid|co2|tvoc)$"),                  "rank"),
+    ]
+
+    _VIZ_PREFIXES = ("/chart_", "/predict_", "/heatmap_", "/compare_", "/rank_")
+
+    _VIZ_HELP = (
+        "Available commands:\n"
+        "  /chart_&lt;hour|day|week&gt;_&lt;temp|humid|co2|tvoc&gt;\n"
+        "  /predict_&lt;node&gt;_&lt;temp|humid|co2|tvoc&gt;\n"
+        "  /heatmap_&lt;temp|humid|co2|tvoc&gt;\n"
+        "  /compare_&lt;nodeA&gt;_&lt;nodeB&gt;\n"
+        "  /rank_&lt;temp|humid|co2|tvoc&gt;\n"
+        "Nodes: M1, M4, M6, M7, M8, M9, M10, M11"
+    )
+
+    def _dispatch_viz_command(
+        self,
+        text: str,
+        target_chat_id: str,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> None:
+        if not any(text.startswith(p) for p in self._VIZ_PREFIXES):
+            return  # not a viz command — ignore silently
+
+        for pattern, kind in self._VIZ_PATTERNS:
+            m = pattern.match(text)
+            if m:
+                groups = m.groups()
+                threading.Thread(
+                    target=self._run_viz_command,
+                    args=(kind, groups, target_chat_id, user_id, username),
+                    daemon=True,
+                ).start()
+                return
+
+        # Matched prefix but failed full pattern — bad params
+        self._send_telegram_message(
+            f"Invalid command format.\n\n{self._VIZ_HELP}", target_chat_id
+        )
+
+    def _run_viz_command(
+        self,
+        kind: str,
+        groups: tuple[str, ...],
+        target_chat_id: str,
+        user_id: str | None,
+        username: str | None,
+    ) -> None:
+        start_time = time.monotonic()
+        with self._lock:
+            df = self._cached_clean_df
+
+        if df is None or df.empty:
+            self._send_telegram_message(
+                "He thong dang khoi dong. Vui long thu lai sau.", target_chat_id
+            )
+            return
+
+        try:
+            buf: io.BytesIO | None = None
+            caption = ""
+            text_reply: str | None = None
+
+            if kind == "chart":
+                range_str, metric = groups
+                buf = viz_engine.chart(df, range_str, metric)
+                caption = f"/chart_{range_str}_{metric}"
+
+            elif kind == "predict":
+                node, metric = groups[0].upper(), groups[1]
+                if node not in NODE_ORDER:
+                    self._send_telegram_message(
+                        f"Node {node} khong ton tai. Hop le: {', '.join(NODE_ORDER)}",
+                        target_chat_id,
+                    )
+                    return
+                with self._lock:
+                    predictor = self._predictor
+                if not predictor.is_fitted:
+                    self._send_telegram_message("Model chua san sang.", target_chat_id)
+                    return
+                buf = viz_engine.predict(df, node, metric, predictor)
+                caption = f"/predict_{node}_{metric}"
+
+            elif kind == "heatmap":
+                metric = groups[0]
+                root = Path(__file__).parent.parent.parent
+                coords = root / "node_coords_v1.json"
+                image  = root / "campus_3d_1.png"
+                buf = viz_engine.heatmap(df, metric, coords, image)
+                caption = f"/heatmap_{metric}"
+
+            elif kind == "compare":
+                node_a, node_b = groups[0].upper(), groups[1].upper()
+                if node_a not in NODE_ORDER:
+                    self._send_telegram_message(
+                        f"Node {node_a} khong ton tai. Hop le: {', '.join(NODE_ORDER)}",
+                        target_chat_id,
+                    )
+                    return
+                if node_b not in NODE_ORDER:
+                    self._send_telegram_message(
+                        f"Node {node_b} khong ton tai. Hop le: {', '.join(NODE_ORDER)}",
+                        target_chat_id,
+                    )
+                    return
+                if node_a == node_b:
+                    self._send_telegram_message(
+                        "Vui long chon hai node khac nhau.", target_chat_id
+                    )
+                    return
+                buf = viz_engine.compare(df, node_a, node_b)
+                caption = f"/compare_{node_a}_{node_b}"
+
+            elif kind == "rank":
+                metric = groups[0]
+                text_reply = viz_engine.rank(df, metric)
+
+            if buf is not None:
+                self._send_telegram_photo(buf, caption, target_chat_id)
+            elif text_reply is not None:
+                self._send_telegram_message(text_reply, target_chat_id)
+
+        except Exception as exc:
+            logger.error("viz command %s failed: %s", kind, exc)
+            self._send_telegram_message(f"Loi khi xu ly lenh: {exc}", target_chat_id)
+            return
+
+        latency_ms = int((time.monotonic() - start_time) * 1000)
+        username_hash = hashlib.sha256(username.encode()).hexdigest()[:16] if username else None
+        self._log_to_supabase("bot_logs", {
+            "user_id": user_id,
+            "username_hash": username_hash,
+            "chat_id": target_chat_id,
+            "command": kind,
+            "query": None,
+            "response": None,
+            "model": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "latency_ms": latency_ms,
+            "is_cached": False,
+        })
 
     def _handle_telegram_command(
         self,

@@ -524,6 +524,33 @@ def heatmap(
     return _heatmap_grid(node_values, metric, unit, vmin, vmax, ts)
 
 
+def heatmap_grid(
+    df: pd.DataFrame,
+    metric: str,
+    at: datetime | None = None,
+) -> io.BytesIO:
+    """Floor-plan grid heatmap (no campus image required)."""
+    col_suffix, unit = METRIC_META[metric]
+    if df.empty:
+        raise ValueError("DataFrame is empty.")
+
+    latest = df.iloc[-1]
+    node_values: dict[str, float] = {}
+    for node in NODES:
+        col = f"{node}{col_suffix}"
+        if col in df.columns:
+            v = latest.get(col)
+            if v is not None and not (isinstance(v, float) and np.isnan(float(v))):
+                node_values[node] = float(v)
+
+    if not node_values:
+        raise ValueError(f"No node values available for metric={metric}.")
+
+    vmin, vmax = _METRIC_VRANGE.get(metric, (min(node_values.values()), max(node_values.values())))
+    ts = at or _now_ict()
+    return _heatmap_grid(node_values, metric, unit, vmin, vmax, ts)
+
+
 def _heatmap_image(
     img: np.ndarray,
     pixel_pos: dict[str, tuple[float, float]],

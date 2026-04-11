@@ -213,8 +213,12 @@ def _node_marker_color(val: float, vmin: float, vmax: float) -> str:
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
-def chart(df: pd.DataFrame, range_str: str, metric: str) -> io.BytesIO:
-    """Shaded band (min/max across all nodes) + mean line for one metric."""
+def chart(df: pd.DataFrame, range_str: str, node: str, metric: str) -> io.BytesIO:
+    """Time-series chart for one metric.
+
+    node="all"  → shaded min/max band + mean + per-node thin lines.
+    node=<NODE> → single node line, thicker and annotated.
+    """
     col_suffix, unit = METRIC_META[metric]
     window_df = _filter_window(df, range_str)
 
@@ -222,45 +226,65 @@ def chart(df: pd.DataFrame, range_str: str, metric: str) -> io.BytesIO:
     if not cols or window_df.empty:
         raise ValueError(f"No data for metric={metric} range={range_str}.")
 
-    numeric = window_df[cols].apply(pd.to_numeric, errors="coerce")
-    mean_s = _smooth(numeric.mean(axis=1))
-    min_s  = _smooth(numeric.min(axis=1))
-    max_s  = _smooth(numeric.max(axis=1))
-
-    if range_str == "week":
-        mean_s = mean_s.resample("30min").mean().dropna()
-        min_s  = min_s.resample("30min").mean().dropna()
-        max_s  = max_s.resample("30min").mean().dropna()
-
     fig, ax = plt.subplots(figsize=(13, 6))
     fig.patch.set_facecolor("#0d1117")
-
-    idx = mean_s.index
-    ax.fill_between(idx, min_s, max_s, alpha=0.18, color="#4cc9f0",
-                    label="All nodes — min/max band")
-    ax.plot(idx, mean_s, color="#4cc9f0", linewidth=2.2,
-            label=f"Mean  ({mean_s.iloc[-1]:.1f} {unit})", zorder=3)
-
-    for col, color in zip(cols, PALETTE):
-        node = col.replace(col_suffix, "")
-        s = _smooth(pd.to_numeric(window_df[col], errors="coerce").dropna())
-        if not s.empty:
-            ax.plot(s.index, s, linewidth=0.9, alpha=0.45, color=color, label=node)
-
     fmt = "%H:%M" if range_str == "hour" else "%d/%m %H:%M"
+
+    if node == "all":
+        numeric = window_df[cols].apply(pd.to_numeric, errors="coerce")
+        mean_s = _smooth(numeric.mean(axis=1))
+        min_s  = _smooth(numeric.min(axis=1))
+        max_s  = _smooth(numeric.max(axis=1))
+
+        if range_str == "week":
+            mean_s = mean_s.resample("30min").mean().dropna()
+            min_s  = min_s.resample("30min").mean().dropna()
+            max_s  = max_s.resample("30min").mean().dropna()
+
+        idx = mean_s.index
+        ax.fill_between(idx, min_s, max_s, alpha=0.18, color="#4cc9f0",
+                        label="All nodes — min/max band")
+        ax.plot(idx, mean_s, color="#4cc9f0", linewidth=2.2,
+                label=f"Mean  ({mean_s.iloc[-1]:.1f} {unit})", zorder=3)
+
+        for col, color in zip(cols, PALETTE):
+            n = col.replace(col_suffix, "")
+            s = _smooth(pd.to_numeric(window_df[col], errors="coerce").dropna())
+            if not s.empty:
+                ax.plot(s.index, s, linewidth=0.9, alpha=0.45, color=color, label=n)
+
+        node_label = "All Nodes"
+        accent = "#4cc9f0"
+
+    else:
+        col = f"{node}{col_suffix}"
+        if col not in window_df.columns:
+            raise ValueError(f"No data for node={node} metric={metric} range={range_str}.")
+        color_idx = NODES.index(node) % len(PALETTE) if node in NODES else 0
+        accent = PALETTE[color_idx]
+        s = _smooth(pd.to_numeric(window_df[col], errors="coerce").dropna())
+        if range_str == "week":
+            s = s.resample("30min").mean().dropna()
+        if s.empty:
+            raise ValueError(f"No data for node={node} metric={metric} range={range_str}.")
+        ax.plot(s.index, s, color=accent, linewidth=2.4,
+                label=f"{node} — {NODE_NAMES.get(node, node)}  ({s.iloc[-1]:.1f} {unit})",
+                zorder=3)
+        node_label = f"{node} — {NODE_NAMES.get(node, node)}"
+
     ax.xaxis.set_major_formatter(mdates.DateFormatter(fmt))
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=20, ha="right")
     ax.set_ylabel(unit, fontsize=9)
     ax.set_title(
-        f"/chart_{range_str}_{metric}  |  All Nodes  |  {_now_ict().strftime('%H:%M')}",
-        color="#e6edf3", fontsize=12, fontweight="bold", pad=10,
+        f"/chart  |  {range_str.capitalize()}  |  {node_label}  |  {metric.upper()}  |  {_now_ict().strftime('%H:%M')}",
+        color="#e6edf3", fontsize=11, fontweight="bold", pad=10,
     )
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend(fontsize=7.5, frameon=True, facecolor="#161b22", edgecolor="#30363d",
               loc="upper left", ncol=2)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#4cc9f0")
+    ax.spines["left"].set_color(accent)
     ax.spines["left"].set_linewidth(1.5)
     ax.spines["bottom"].set_color("#30363d")
     ax.tick_params(labelsize=8)

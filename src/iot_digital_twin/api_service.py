@@ -651,11 +651,11 @@ class InferenceAPIService:
     # ── Regex-based viz dispatcher ─────────────────────────────────────────
 
     _VIZ_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-        (re.compile(r"^/chart_(hour|day|week)_(temp|humid|co2|tvoc)$"), "chart"),
-        (re.compile(r"^/predict_(m\d+)_(temp|humid|co2|tvoc)$"),        "predict"),
-        (re.compile(r"^/heatmap_(temp|humid|co2|tvoc)$"),               "heatmap"),
-        (re.compile(r"^/compare_(m\d+)_(m\d+)$"),                       "compare"),
-        (re.compile(r"^/rank_(temp|humid|co2|tvoc)$"),                  "rank"),
+        (re.compile(r"^/chart_(hour|day|week)_(all|m\d+)_(temp|humid|co2|tvoc)$"), "chart"),
+        (re.compile(r"^/predict_(m\d+)_(temp|humid|co2|tvoc)$"),                   "predict"),
+        (re.compile(r"^/heatmap_(temp|humid|co2|tvoc)$"),                          "heatmap"),
+        (re.compile(r"^/compare_(m\d+)_(m\d+)$"),                                  "compare"),
+        (re.compile(r"^/rank_(temp|humid|co2|tvoc)$"),                             "rank"),
     ]
 
     _VIZ_PREFIXES = ("/chart_", "/predict_", "/heatmap_", "/compare_", "/rank_")
@@ -684,9 +684,12 @@ class InferenceAPIService:
         ],
     ]
 
+    # Node buttons for /chart — same list but callback carries the pending range.
+    # Built dynamically in the callback handler once the range is known.
+
     _VIZ_HELP = (
         "Available commands:\n"
-        "  /chart_&lt;hour|day|week&gt;_&lt;temp|humid|co2|tvoc&gt;\n"
+        "  /chart_&lt;hour|day|week&gt;_&lt;all|node&gt;_&lt;temp|humid|co2|tvoc&gt;\n"
         "  /predict_&lt;node&gt;_&lt;temp|humid|co2|tvoc&gt;\n"
         "  /heatmap_&lt;temp|humid|co2|tvoc&gt;\n"
         "  /compare_&lt;nodeA&gt;_&lt;nodeB&gt;\n"
@@ -778,27 +781,51 @@ class InferenceAPIService:
 
         ctx = dict(target_chat_id=chat_id, user_id=user_id, username=username)
 
-        # viz:chart:range:<range> → show metric selection
+        # viz:chart:range:<range> → show node selection
         if parts[1] == "chart" and parts[2] == "range":
             range_str = parts[3]
-            buttons = [[
-                {"text": "Temp",  "callback_data": f"viz:chart:go:{range_str}:temp"},
-                {"text": "Humid", "callback_data": f"viz:chart:go:{range_str}:humid"},
-                {"text": "CO2",   "callback_data": f"viz:chart:go:{range_str}:co2"},
-                {"text": "TVOC",  "callback_data": f"viz:chart:go:{range_str}:tvoc"},
-            ]]
+            buttons = [
+                [{"text": "All Nodes", "callback_data": f"viz:chart:node:{range_str}:all"}],
+                [
+                    {"text": f"{n} — {NODE_NAMES[n]}",
+                     "callback_data": f"viz:chart:node:{range_str}:{n}"}
+                    for n in NODE_ORDER[:4]
+                ],
+                [
+                    {"text": f"{n} — {NODE_NAMES[n]}",
+                     "callback_data": f"viz:chart:node:{range_str}:{n}"}
+                    for n in NODE_ORDER[4:]
+                ],
+            ]
             self._edit_message_text(chat_id, message_id,
-                                    f"Range: <b>{range_str}</b>  —  Select metric:",
+                                    f"Range: <b>{range_str}</b>  —  Select node:",
                                     buttons)
 
-        # viz:chart:go:<range>:<metric> → render chart
+        # viz:chart:node:<range>:<node> → show metric selection
+        elif parts[1] == "chart" and parts[2] == "node":
+            range_str, node = parts[3], parts[4]
+            node_label = "All Nodes" if node == "all" else f"{node} — {NODE_NAMES.get(node, node)}"
+            buttons = [[
+                {"text": "Temp",  "callback_data": f"viz:chart:go:{range_str}:{node}:temp"},
+                {"text": "Humid", "callback_data": f"viz:chart:go:{range_str}:{node}:humid"},
+                {"text": "CO2",   "callback_data": f"viz:chart:go:{range_str}:{node}:co2"},
+                {"text": "TVOC",  "callback_data": f"viz:chart:go:{range_str}:{node}:tvoc"},
+            ]]
+            self._edit_message_text(
+                chat_id, message_id,
+                f"Range: <b>{range_str}</b>  |  Node: <b>{node_label}</b>  —  Select metric:",
+                buttons,
+            )
+
+        # viz:chart:go:<range>:<node>:<metric> → render chart
         elif parts[1] == "chart" and parts[2] == "go":
-            range_str, metric = parts[3], parts[4]
+            range_str, node, metric = parts[3], parts[4], parts[5]
+            node_label = "All Nodes" if node == "all" else node
             self._edit_message_text(chat_id, message_id,
-                                    f"Generating /chart_{range_str}_{metric}...")
+                                    f"Generating chart — {range_str} / {node_label} / {metric}...")
             threading.Thread(
                 target=self._run_viz_command,
-                args=("chart", (range_str, metric), chat_id, user_id, username),
+                args=("chart", (range_str, node, metric), chat_id, user_id, username),
                 daemon=True,
             ).start()
 
@@ -905,9 +932,10 @@ class InferenceAPIService:
             text_reply: str | None = None
 
             if kind == "chart":
-                range_str, metric = groups
-                buf = viz_engine.chart(df, range_str, metric)
-                caption = f"/chart_{range_str}_{metric}"
+                range_str, node, metric = groups
+                buf = viz_engine.chart(df, range_str, node, metric)
+                node_label = "all" if node == "all" else node.upper()
+                caption = f"/chart_{range_str}_{node_label}_{metric}"
 
             elif kind == "predict":
                 node, metric = groups[0].upper(), groups[1]

@@ -68,13 +68,15 @@ Training window: last **1200 rows (~60h)** at 3-min cadence.
 | `/getcurrent_short` | Summary: avg temp/humidity + anomaly count |
 | `/getcurrent_alert` | Active threshold breaches only |
 | `/ask <question>` | AI assistant. Usage: /ask <question> |
-| `/chart` | Interactive chart: select range and metric |
+| `/chart` | Interactive chart: select range, node, and metric |
 | `/heatmap` | Interactive spatial heatmap: select metric |
 | `/rank` | Interactive node ranking: select metric |
 | `/compare` | Interactive node comparison: select two nodes |
 | `/predict` | Interactive LSTM forecast: select node and metric |
 
-Power users can also use the full command syntax directly (e.g. `/chart_day_temp`, `/heatmap_co2`, `/rank_humid`, `/compare_M1_M4`, `/predict_M7_tvoc`).
+Power users can also use the full command syntax directly (e.g. `/chart_day_all_temp`, `/chart_hour_M1_temp`, `/heatmap_co2`, `/rank_humid`, `/compare_M1_M4`, `/predict_M7_tvoc`).
+
+Command parameter order: **range → node → metric** (omitted where not applicable).
 
 Nodes: `M1 (Canteen Garden)`, `M4 (Studio ISCM)`, `M6 (ISCM Staircase)`, `M7 (Sky Garden)`, `M8 (ISCM Balcony)`, `M9 (Hotel Kitchen)`, `M10 (Hotel Corridor)`, `M11 (Hotel Balcony)`
 

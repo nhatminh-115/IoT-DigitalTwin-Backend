@@ -74,6 +74,17 @@ _ICT = timezone(timedelta(hours=7))
 
 NODE_ORDER = ["M1", "M4", "M6", "M7", "M8", "M9", "M10", "M11"]
 
+NODE_NAMES: dict[str, str] = {
+    "M1":  "Canteen Garden",
+    "M4":  "Studio ISCM",
+    "M6":  "ISCM Staircase",
+    "M7":  "Sky Garden",
+    "M8":  "ISCM Balcony",
+    "M9":  "Hotel Kitchen",
+    "M10": "Hotel Corridor",
+    "M11": "Hotel Balcony",
+}
+
 
 def _now_ict() -> datetime:
     return datetime.now(_ICT)
@@ -341,6 +352,70 @@ class InferenceAPIService:
         except Exception as exc:
             logger.error("sendPhoto failed: %s", exc)
 
+    def _send_inline_keyboard(
+        self,
+        text: str,
+        buttons: list[list[dict]],
+        target_chat_id: str,
+    ) -> int | None:
+        """Send message with inline keyboard. Returns message_id."""
+        if not self._bot_token:
+            return None
+        try:
+            url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
+            payload = json.dumps({
+                "chat_id": target_chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": buttons},
+            }).encode("utf-8")
+            req = urllib.request.Request(url, data=payload,
+                                          headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read())
+                return result.get("result", {}).get("message_id")
+        except Exception as exc:
+            logger.error("sendInlineKeyboard failed: %s", exc)
+            return None
+
+    def _edit_message_text(
+        self,
+        chat_id: str,
+        message_id: int,
+        text: str,
+        buttons: list[list[dict]] | None = None,
+    ) -> None:
+        """Edit an existing message text and optionally update its keyboard."""
+        if not self._bot_token:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self._bot_token}/editMessageText"
+            body: dict = {"chat_id": chat_id, "message_id": message_id,
+                          "text": text, "parse_mode": "HTML"}
+            if buttons is not None:
+                body["reply_markup"] = {"inline_keyboard": buttons}
+            payload = json.dumps(body).encode("utf-8")
+            req = urllib.request.Request(url, data=payload,
+                                          headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp.read()
+        except Exception as exc:
+            logger.error("editMessageText failed: %s", exc)
+
+    def _answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
+        """Dismiss the loading spinner on an inline button press."""
+        if not self._bot_token:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self._bot_token}/answerCallbackQuery"
+            payload = json.dumps({"callback_query_id": callback_query_id, "text": text}).encode("utf-8")
+            req = urllib.request.Request(url, data=payload,
+                                          headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                resp.read()
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Internal helpers — sensor threshold evaluation
     # ------------------------------------------------------------------
@@ -535,6 +610,12 @@ class InferenceAPIService:
                     for update in payload["result"]:
                         last_update_id = update["update_id"] + 1
 
+                        # Handle inline keyboard button presses
+                        cq = update.get("callback_query")
+                        if cq:
+                            self._handle_callback_query(cq)
+                            continue
+
                         # Support DMs/groups ('message') and broadcast channels ('channel_post').
                         msg_node = update.get("message") or update.get("channel_post")
                         if not (msg_node and "text" in msg_node):
@@ -577,6 +658,30 @@ class InferenceAPIService:
 
     _VIZ_PREFIXES = ("/chart_", "/predict_", "/heatmap_", "/compare_", "/rank_")
 
+    _METRIC_BUTTONS: list[list[dict]] = [[
+        {"text": "Temp",  "callback_data": "viz:sel:metric:temp"},
+        {"text": "Humid", "callback_data": "viz:sel:metric:humid"},
+        {"text": "CO2",   "callback_data": "viz:sel:metric:co2"},
+        {"text": "TVOC",  "callback_data": "viz:sel:metric:tvoc"},
+    ]]
+
+    _RANGE_BUTTONS: list[list[dict]] = [[
+        {"text": "Hour", "callback_data": "viz:chart:range:hour"},
+        {"text": "Day",  "callback_data": "viz:chart:range:day"},
+        {"text": "Week", "callback_data": "viz:chart:range:week"},
+    ]]
+
+    _NODE_BUTTONS: list[list[dict]] = [
+        [
+            {"text": f"{n} — {NODE_NAMES[n]}", "callback_data": f"viz:sel:node:{n}"}
+            for n in NODE_ORDER[:4]
+        ],
+        [
+            {"text": f"{n} — {NODE_NAMES[n]}", "callback_data": f"viz:sel:node:{n}"}
+            for n in NODE_ORDER[4:]
+        ],
+    ]
+
     _VIZ_HELP = (
         "Available commands:\n"
         "  /chart_&lt;hour|day|week&gt;_&lt;temp|humid|co2|tvoc&gt;\n"
@@ -584,8 +689,35 @@ class InferenceAPIService:
         "  /heatmap_&lt;temp|humid|co2|tvoc&gt;\n"
         "  /compare_&lt;nodeA&gt;_&lt;nodeB&gt;\n"
         "  /rank_&lt;temp|humid|co2|tvoc&gt;\n"
-        "Nodes: M1, M4, M6, M7, M8, M9, M10, M11"
+        "Nodes: M1 (Canteen Garden), M4 (Studio ISCM), M6 (ISCM Staircase),\n"
+        "       M7 (Sky Garden), M8 (ISCM Balcony), M9 (Hotel Kitchen),\n"
+        "       M10 (Hotel Corridor), M11 (Hotel Balcony)"
     )
+
+    def _start_chart_keyboard(self, target_chat_id: str, **_) -> None:
+        self._send_inline_keyboard(
+            "Select time range:", self._RANGE_BUTTONS, target_chat_id
+        )
+
+    def _start_heatmap_keyboard(self, target_chat_id: str, **_) -> None:
+        self._send_inline_keyboard(
+            "Select metric for heatmap:", self._METRIC_BUTTONS, target_chat_id
+        )
+
+    def _start_rank_keyboard(self, target_chat_id: str, **_) -> None:
+        self._send_inline_keyboard(
+            "Select metric to rank:", self._METRIC_BUTTONS, target_chat_id
+        )
+
+    def _start_compare_keyboard(self, target_chat_id: str, **_) -> None:
+        self._send_inline_keyboard(
+            "Select first node to compare:", self._NODE_BUTTONS, target_chat_id
+        )
+
+    def _start_predict_keyboard(self, target_chat_id: str, **_) -> None:
+        self._send_inline_keyboard(
+            "Select node to forecast:", self._NODE_BUTTONS, target_chat_id
+        )
 
     def _dispatch_viz_command(
         self,
@@ -594,6 +726,18 @@ class InferenceAPIService:
         user_id: str | None = None,
         username: str | None = None,
     ) -> None:
+        # Bare command → trigger inline keyboard
+        _KEYBOARD_MAP = {
+            "/chart":   self._start_chart_keyboard,
+            "/heatmap": self._start_heatmap_keyboard,
+            "/rank":    self._start_rank_keyboard,
+            "/compare": self._start_compare_keyboard,
+            "/predict": self._start_predict_keyboard,
+        }
+        if text in _KEYBOARD_MAP:
+            _KEYBOARD_MAP[text](target_chat_id=target_chat_id)
+            return
+
         if not any(text.startswith(p) for p in self._VIZ_PREFIXES):
             return  # not a viz command — ignore silently
 
@@ -613,6 +757,128 @@ class InferenceAPIService:
             f"Invalid command format.\n\n{self._VIZ_HELP}", target_chat_id
         )
 
+    def _handle_callback_query(self, cq: dict) -> None:
+        query_id   = cq["id"]
+        data       = cq.get("data", "")
+        chat_id    = str(cq["message"]["chat"]["id"])
+        message_id = cq["message"]["message_id"]
+        sender     = cq.get("from") or {}
+        user_id    = str(sender.get("id", "")) or None
+        username   = sender.get("username") or sender.get("first_name") or None
+
+        self._answer_callback_query(query_id)
+
+        if not data.startswith("viz:"):
+            return
+
+        parts = data.split(":")
+        # parts[0] = "viz", parts[1] = step/command, parts[2+] = values
+
+        ctx = dict(target_chat_id=chat_id, user_id=user_id, username=username)
+
+        # viz:chart:range:<range> → show metric selection
+        if parts[1] == "chart" and parts[2] == "range":
+            range_str = parts[3]
+            buttons = [[
+                {"text": "Temp",  "callback_data": f"viz:chart:go:{range_str}:temp"},
+                {"text": "Humid", "callback_data": f"viz:chart:go:{range_str}:humid"},
+                {"text": "CO2",   "callback_data": f"viz:chart:go:{range_str}:co2"},
+                {"text": "TVOC",  "callback_data": f"viz:chart:go:{range_str}:tvoc"},
+            ]]
+            self._edit_message_text(chat_id, message_id,
+                                    f"Range: <b>{range_str}</b>  —  Select metric:",
+                                    buttons)
+
+        # viz:chart:go:<range>:<metric> → render chart
+        elif parts[1] == "chart" and parts[2] == "go":
+            range_str, metric = parts[3], parts[4]
+            self._edit_message_text(chat_id, message_id,
+                                    f"Generating /chart_{range_str}_{metric}...")
+            threading.Thread(
+                target=self._run_viz_command,
+                args=("chart", (range_str, metric), chat_id, user_id, username),
+                daemon=True,
+            ).start()
+
+        # viz:sel:metric:<metric> — used by heatmap and rank (need context from message text)
+        elif parts[1] == "sel" and parts[2] == "metric":
+            metric = parts[3]
+            original_text = cq["message"].get("text", "")
+            if "heatmap" in original_text.lower():
+                self._edit_message_text(chat_id, message_id,
+                                        f"Generating /heatmap_{metric}...")
+                threading.Thread(
+                    target=self._run_viz_command,
+                    args=("heatmap", (metric,), chat_id, user_id, username),
+                    daemon=True,
+                ).start()
+            else:  # rank
+                self._edit_message_text(chat_id, message_id,
+                                        f"Generating /rank_{metric}...")
+                threading.Thread(
+                    target=self._run_viz_command,
+                    args=("rank", (metric,), chat_id, user_id, username),
+                    daemon=True,
+                ).start()
+
+        # viz:sel:node:<node> — used by compare (pick nodeA) and predict (pick node)
+        elif parts[1] == "sel" and parts[2] == "node":
+            node = parts[3]
+            original_text = cq["message"].get("text", "")
+            if "compare" in original_text.lower() or "Select first node" in original_text:
+                # First node selected, now pick second
+                buttons = [
+                    [
+                        {"text": f"{n} — {NODE_NAMES[n]}",
+                         "callback_data": f"viz:compare:go:{node}:{n}"}
+                        for n in NODE_ORDER[:4] if n != node
+                    ],
+                    [
+                        {"text": f"{n} — {NODE_NAMES[n]}",
+                         "callback_data": f"viz:compare:go:{node}:{n}"}
+                        for n in NODE_ORDER[4:] if n != node
+                    ],
+                ]
+                self._edit_message_text(
+                    chat_id, message_id,
+                    f"Node A: <b>{node} — {NODE_NAMES.get(node, node)}</b>\n\nSelect node B:",
+                    buttons,
+                )
+            else:  # predict: node selected, now pick metric
+                buttons = [[
+                    {"text": "Temp",  "callback_data": f"viz:predict:go:{node}:temp"},
+                    {"text": "Humid", "callback_data": f"viz:predict:go:{node}:humid"},
+                    {"text": "CO2",   "callback_data": f"viz:predict:go:{node}:co2"},
+                    {"text": "TVOC",  "callback_data": f"viz:predict:go:{node}:tvoc"},
+                ]]
+                self._edit_message_text(
+                    chat_id, message_id,
+                    f"Node: <b>{node} — {NODE_NAMES.get(node, node)}</b>\n\nSelect metric to forecast:",
+                    buttons,
+                )
+
+        # viz:compare:go:<nodeA>:<nodeB>
+        elif parts[1] == "compare" and parts[2] == "go":
+            node_a, node_b = parts[3], parts[4]
+            self._edit_message_text(chat_id, message_id,
+                                    f"Generating /compare_{node_a}_{node_b}...")
+            threading.Thread(
+                target=self._run_viz_command,
+                args=("compare", (node_a.lower(), node_b.lower()), chat_id, user_id, username),
+                daemon=True,
+            ).start()
+
+        # viz:predict:go:<node>:<metric>
+        elif parts[1] == "predict" and parts[2] == "go":
+            node, metric = parts[3], parts[4]
+            self._edit_message_text(chat_id, message_id,
+                                    f"Generating /predict_{node}_{metric}...")
+            threading.Thread(
+                target=self._run_viz_command,
+                args=("predict", (node.lower(), metric), chat_id, user_id, username),
+                daemon=True,
+            ).start()
+
     def _run_viz_command(
         self,
         kind: str,
@@ -627,7 +893,7 @@ class InferenceAPIService:
 
         if df is None or df.empty:
             self._send_telegram_message(
-                "He thong dang khoi dong. Vui long thu lai sau.", target_chat_id
+                "System is starting up. Please try again in a moment.", target_chat_id
             )
             return
 
@@ -645,14 +911,14 @@ class InferenceAPIService:
                 node, metric = groups[0].upper(), groups[1]
                 if node not in NODE_ORDER:
                     self._send_telegram_message(
-                        f"Node {node} khong ton tai. Hop le: {', '.join(NODE_ORDER)}",
+                        f"Unknown node {node}. Valid nodes: {', '.join(NODE_ORDER)}",
                         target_chat_id,
                     )
                     return
                 with self._lock:
                     predictor = self._predictor
                 if not predictor.is_fitted:
-                    self._send_telegram_message("Model chua san sang.", target_chat_id)
+                    self._send_telegram_message("Model not ready yet. Please try again shortly.", target_chat_id)
                     return
                 buf = viz_engine.predict(df, node, metric, predictor)
                 caption = f"/predict_{node}_{metric}"
@@ -669,19 +935,19 @@ class InferenceAPIService:
                 node_a, node_b = groups[0].upper(), groups[1].upper()
                 if node_a not in NODE_ORDER:
                     self._send_telegram_message(
-                        f"Node {node_a} khong ton tai. Hop le: {', '.join(NODE_ORDER)}",
+                        f"Unknown node {node_a}. Valid nodes: {', '.join(NODE_ORDER)}",
                         target_chat_id,
                     )
                     return
                 if node_b not in NODE_ORDER:
                     self._send_telegram_message(
-                        f"Node {node_b} khong ton tai. Hop le: {', '.join(NODE_ORDER)}",
+                        f"Unknown node {node_b}. Valid nodes: {', '.join(NODE_ORDER)}",
                         target_chat_id,
                     )
                     return
                 if node_a == node_b:
                     self._send_telegram_message(
-                        "Vui long chon hai node khac nhau.", target_chat_id
+                        "Please select two different nodes.", target_chat_id
                     )
                     return
                 buf = viz_engine.compare(df, node_a, node_b)
@@ -698,7 +964,7 @@ class InferenceAPIService:
 
         except Exception as exc:
             logger.error("viz command %s failed: %s", kind, exc)
-            self._send_telegram_message(f"Loi khi xu ly lenh: {exc}", target_chat_id)
+            self._send_telegram_message(f"Error processing command: {exc}", target_chat_id)
             return
 
         latency_ms = int((time.monotonic() - start_time) * 1000)
@@ -801,16 +1067,15 @@ class InferenceAPIService:
         start_time = time.monotonic()
         if not query:
             self._send_telegram_message(
-                "[AI] Vui lòng nhập câu hỏi sau lệnh /ask.\n"
-                "Ví dụ: /ask Nhiệt độ M1 hiện tại có ổn không?",
+                "[AI] Please provide a question after /ask.\n"
+                "Example: /ask Is M1 temperature normal right now?",
                 target_chat_id,
             )
             return
 
         if self._ai_assistant is None:
             self._send_telegram_message(
-                "[AI] Trợ lý AI chưa được kích hoạt. "
-                "Kiểm tra biến môi trường GROQ_API_KEY, SUPABASE_URL, SUPABASE_KEY.",
+                "[AI] AI assistant is not available. Check GROQ_API_KEY environment variable.",
                 target_chat_id,
             )
             return
@@ -838,7 +1103,7 @@ class InferenceAPIService:
         except Exception as exc:
             logger.error("AIAssistant.answer failed: %s", exc)
             self._send_telegram_message(
-                f"[AI] Lỗi khi xử lý câu hỏi: {exc}",
+                f"[AI] Error processing your question: {exc}",
                 target_chat_id,
             )
 

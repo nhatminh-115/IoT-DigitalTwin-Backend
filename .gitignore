@@ -11,3 +11,5 @@ artifacts/*.csv
 test_ae.py
 *.png
 .claude/
+*.mp4
+test_*.py

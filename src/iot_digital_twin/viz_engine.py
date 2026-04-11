@@ -39,6 +39,17 @@ plt.rcParams.update({
 
 NODES = ["M1", "M4", "M6", "M7", "M8", "M9", "M10", "M11"]
 
+NODE_NAMES: dict[str, str] = {
+    "M1":  "Canteen Garden",
+    "M4":  "Studio ISCM",
+    "M6":  "ISCM Staircase",
+    "M7":  "Sky Garden",
+    "M8":  "ISCM Balcony",
+    "M9":  "Hotel Kitchen",
+    "M10": "Hotel Corridor",
+    "M11": "Hotel Balcony",
+}
+
 PALETTE = [
     "#4cc9f0", "#f72585", "#7bed9f", "#ffd32a",
     "#a29bfe", "#fd9644", "#00d2d3", "#ff6b81",
@@ -73,14 +84,14 @@ _NODE_GRID_POS: dict[str, tuple[float, float]] = {
 }
 
 _ROOMS: list[tuple[str, float, float, float, float]] = [
-    ("Lab A (M1)",    0.1, 4.6, 2.5, 1.8),
-    ("Office (M4)",   3.2, 4.6, 2.9, 1.8),
-    ("Hall (M6)",     0.1, 1.9, 2.0, 2.3),
-    ("Room (M7)",     2.5, 1.9, 1.8, 2.3),
-    ("Lab B (M8)",    4.5, 1.9, 2.9, 2.3),
-    ("Storage (M9)",  0.1, 0.1, 1.8, 1.5),
-    ("Server (M10)",  2.4, 0.1, 2.4, 1.5),
-    ("Meeting (M11)", 5.2, 0.1, 2.2, 1.5),
+    ("Canteen Garden\n(M1)",    0.1, 4.6, 2.5, 1.8),
+    ("Studio ISCM\n(M4)",       3.2, 4.6, 2.9, 1.8),
+    ("ISCM Staircase\n(M6)",    0.1, 1.9, 2.0, 2.3),
+    ("Sky Garden\n(M7)",        2.5, 1.9, 1.8, 2.3),
+    ("ISCM Balcony\n(M8)",      4.5, 1.9, 2.9, 2.3),
+    ("Hotel Kitchen\n(M9)",     0.1, 0.1, 1.8, 1.5),
+    ("Hotel Corridor\n(M10)",   2.4, 0.1, 2.4, 1.5),
+    ("Hotel Balcony\n(M11)",    5.2, 0.1, 2.2, 1.5),
 ]
 
 _HEAT_CMAP = mcolors.LinearSegmentedColormap.from_list(
@@ -451,6 +462,7 @@ def heatmap(
     metric: str,
     coords_path: Path | None = None,
     image_path: Path | None = None,
+    at: datetime | None = None,
 ) -> io.BytesIO:
     """IDW spatial heatmap. Uses campus image overlay if files exist, else floor-plan grid."""
     _ensure_campus_images()
@@ -473,17 +485,19 @@ def heatmap(
     vmin, vmax = _METRIC_VRANGE.get(metric, (min(node_values.values()), max(node_values.values())))
 
     # Try campus image overlay
+    ts = at or _now_ict()
+
     if coords_path and coords_path.exists() and image_path and image_path.exists():
         try:
             import matplotlib.image as mpimg
             raw_coords: dict[str, list[int]] = json.loads(coords_path.read_text(encoding="utf-8"))
             pixel_pos = {n: (float(xy[0]), float(xy[1])) for n, xy in raw_coords.items()}
             campus_img = mpimg.imread(str(image_path))
-            return _heatmap_image(campus_img, pixel_pos, node_values, metric, unit, vmin, vmax)
+            return _heatmap_image(campus_img, pixel_pos, node_values, metric, unit, vmin, vmax, ts)
         except Exception:
             pass  # fall through to grid
 
-    return _heatmap_grid(node_values, metric, unit, vmin, vmax)
+    return _heatmap_grid(node_values, metric, unit, vmin, vmax, ts)
 
 
 def _heatmap_image(
@@ -494,6 +508,7 @@ def _heatmap_image(
     unit: str,
     vmin: float,
     vmax: float,
+    ts: datetime | None = None,
 ) -> io.BytesIO:
     h, w = img.shape[:2]
     visible_pos = {n: pos for n, pos in pixel_pos.items() if n in node_values}
@@ -521,9 +536,10 @@ def _heatmap_image(
 
     for node, (px, py) in visible_pos.items():
         val = node_values[node]
+        room = NODE_NAMES.get(node, node)
         ax.scatter(px, py, s=120, color="white", edgecolors="black",
                    linewidths=1.5, zorder=10)
-        ax.text(px, py + 22, f"{node}  {val:.1f} {unit}",
+        ax.text(px, py + 22, f"{node} — {room}\n{val:.1f} {unit}",
                 color="white", fontsize=9, fontweight="bold", ha="center",
                 bbox=dict(facecolor="black", alpha=0.65, pad=2, linewidth=0),
                 zorder=11)
@@ -539,8 +555,9 @@ def _heatmap_image(
     ax.set_xlim(0, w)
     ax.set_ylim(h, 0)
     ax.axis("off")
+    label_ts = ts or _now_ict()
     ax.set_title(
-        f"/heatmap_{metric}  |  Campus Overlay  |  {_now_ict().strftime('%H:%M')}",
+        f"/heatmap_{metric}  |  Campus Overlay  |  {label_ts.strftime('%H:%M  %d/%m/%Y')}",
         color="#e6edf3", fontsize=13, fontweight="bold", pad=14,
     )
     fig.text(
@@ -559,6 +576,7 @@ def _heatmap_grid(
     unit: str,
     vmin: float,
     vmax: float,
+    ts: datetime | None = None,
 ) -> io.BytesIO:
     gx, gy = np.meshgrid(np.linspace(0, 7.5, 300), np.linspace(0, 6.8, 300))
     gz = _idw(gx, gy, _NODE_GRID_POS, node_values)
@@ -600,8 +618,9 @@ def _heatmap_grid(
     ax.set_ylim(0, 6.8)
     ax.set_aspect("equal")
     ax.axis("off")
+    label_ts = ts or _now_ict()
     ax.set_title(
-        f"/heatmap_{metric}  |  Floor Plan  |  {_now_ict().strftime('%H:%M')}",
+        f"/heatmap_{metric}  |  Floor Plan  |  {label_ts.strftime('%H:%M  %d/%m/%Y')}",
         color="#e6edf3", fontsize=12, fontweight="bold", pad=12,
     )
 
@@ -646,6 +665,7 @@ def rank(df: pd.DataFrame, metric: str) -> str:
     for i, (node, val) in enumerate(scored):
         prefix = medals[i] if i < 3 else f"  {i + 1}."
         suffix = "  <i>(highest)</i>" if i == 0 else "  <i>(lowest)</i>" if i == len(scored) - 1 else ""
-        lines.append(f"{prefix} <b>{node}</b>: {val:.1f} {unit}{suffix}")
+        room = NODE_NAMES.get(node, node)
+        lines.append(f"{prefix} <b>{node}</b> {room}: {val:.1f} {unit}{suffix}")
 
     return "\n".join(lines)

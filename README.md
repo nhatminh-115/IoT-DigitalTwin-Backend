@@ -64,10 +64,19 @@ Training window: last **1200 rows (~60h)** at 3-min cadence.
 
 | Command | Description |
 |---|---|
-| `/getcurrent_detail` | Full node table with all 8 sensors |
-| `/getcurrent_short` | Average temp/humidity + active anomaly count |
+| `/getcurrent_detail` | Full sensor table, all 8 nodes |
+| `/getcurrent_short` | Summary: avg temp/humidity + anomaly count |
 | `/getcurrent_alert` | Active threshold breaches only |
-| `/ask <question>` | AI assistant powered by Groq LLM (Vietnamese) |
+| `/ask <question>` | AI assistant. Usage: /ask <question> |
+| `/chart` | Interactive chart: select range and metric |
+| `/heatmap` | Interactive spatial heatmap: select metric |
+| `/rank` | Interactive node ranking: select metric |
+| `/compare` | Interactive node comparison: select two nodes |
+| `/predict` | Interactive LSTM forecast: select node and metric |
+
+Power users can also use the full command syntax directly (e.g. `/chart_day_temp`, `/heatmap_co2`, `/rank_humid`, `/compare_M1_M4`, `/predict_M7_tvoc`).
+
+Nodes: `M1 (Canteen Garden)`, `M4 (Studio ISCM)`, `M6 (ISCM Staircase)`, `M7 (Sky Garden)`, `M8 (ISCM Balcony)`, `M9 (Hotel Kitchen)`, `M10 (Hotel Corridor)`, `M11 (Hotel Balcony)`
 
 Alert cooldown: 1 hour per sensor channel.
 

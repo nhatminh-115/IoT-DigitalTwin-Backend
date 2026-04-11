@@ -102,6 +102,29 @@ _ICT = timezone(timedelta(hours=7))
 # Project root: three levels above this file (src/iot_digital_twin/viz_engine.py)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+# HF Dataset repo that holds campus images (set to None to disable auto-download).
+_HF_ASSET_REPO = "Nhatminh1234/iot-campus-assets"
+_CAMPUS_IMAGES = ["campus_3d.png", "campus_3d_1.png"]
+
+
+def _ensure_campus_images() -> None:
+    """Download campus images from HF Dataset if not present locally."""
+    missing = [f for f in _CAMPUS_IMAGES if not (_PROJECT_ROOT / f).exists()]
+    if not missing:
+        return
+    try:
+        from huggingface_hub import hf_hub_download
+        for fname in missing:
+            local = hf_hub_download(
+                repo_id=_HF_ASSET_REPO,
+                filename=fname,
+                repo_type="dataset",
+                local_dir=str(_PROJECT_ROOT),
+            )
+            print(f"Downloaded {fname} -> {local}")
+    except Exception as exc:
+        print(f"Could not download campus images (heatmap will use grid fallback): {exc}")
+
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -430,6 +453,7 @@ def heatmap(
     image_path: Path | None = None,
 ) -> io.BytesIO:
     """IDW spatial heatmap. Uses campus image overlay if files exist, else floor-plan grid."""
+    _ensure_campus_images()
     col_suffix, unit = METRIC_META[metric]
     if df.empty:
         raise ValueError("DataFrame is empty.")

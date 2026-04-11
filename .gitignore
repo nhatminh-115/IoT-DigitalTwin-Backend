@@ -10,5 +10,4 @@ artifacts/*.csv
 !artifacts/prediction_log.csv
 test_ae.py
 *.png
-!campus_3d*.png
 .claude/

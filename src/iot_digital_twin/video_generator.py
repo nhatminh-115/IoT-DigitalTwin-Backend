@@ -354,6 +354,8 @@ def generate_video(
             frame = _render_frame(df_day, ts, i, precomputed, campus_img, pixel_pos)
             writer.append_data(frame)
             del frame
+            if i % 8 == 0 or i == n - 1:
+                logger.info("  [%d/%d] %s", i + 1, n, ts.strftime("%H:%M"))
     finally:
         writer.close()
 

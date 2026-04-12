@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.iot_digital_twin.api_service import ApiServiceConfig, ApiServiceError, InferenceAPIService
+from src.iot_digital_twin import viz_engine
 
 
 CSV_URL = (
@@ -117,3 +119,28 @@ def retrain() -> dict:
         return service.retrain_now()
     except ApiServiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/heatmap/{metric}")
+def get_heatmap(metric: str) -> StreamingResponse:
+    """Returns a heatmap image for the specified metric (temp, humid, co2, tvoc)."""
+    if metric not in ["temp", "humid", "co2", "tvoc"]:
+        raise HTTPException(status_code=400, detail="Invalid metric.")
+    
+    clean_df = service._cached_clean_df
+    if clean_df is None or clean_df.empty:
+        raise HTTPException(status_code=503, detail="Data not available yet. Please try again.")
+
+    try:
+        coords_path = Path("node_coords_v1.json")
+        image_path = Path("campus_3d_1.png")
+        
+        buf = viz_engine.heatmap(
+            clean_df, 
+            metric=metric,
+            coords_path=coords_path if coords_path.exists() else None,
+            image_path=image_path if image_path.exists() else None
+        )
+        return StreamingResponse(buf, media_type="image/png")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error generating heatmap: {exc}")

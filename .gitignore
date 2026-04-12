@@ -13,3 +13,5 @@ test_ae.py
 .claude/
 *.mp4
 test_*.py
+frontend-web/
+scratch/

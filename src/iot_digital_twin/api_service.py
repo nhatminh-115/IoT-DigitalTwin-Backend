@@ -60,7 +60,8 @@ _HOUR_ROWS: int = 20   # 60 min / 3 min
 _WEEK_ROWS: int = 3360 # 7 × 480
 
 # Cooldown between repeated alerts for the same sensor channel (seconds).
-_ALERT_COOLDOWN_SECONDS: float = 3600.0
+_SENSOR_ALERT_COOLDOWN_SECONDS: float = 3600.0
+_AE_ALERT_COOLDOWN_SECONDS: float = 3600.0
 
 _HYSTERESIS_MARGIN: dict[str, float] = {
     "_Temp":  0.5,
@@ -155,6 +156,35 @@ def _build_alert_lines(breaches: list[tuple[str, float, str]]) -> list[str]:
     return lines
 
 
+def _breach_severity(col: str, value: float) -> float:
+    """Returns threshold-distance severity used for deduplicating repeated breaches."""
+    suffix = next((s for s in _SENSOR_THRESHOLDS if col.endswith(s)), None)
+    if suffix is None:
+        return 0.0
+    threshold = _SENSOR_THRESHOLDS[suffix]
+    if threshold.hi is not None and value > threshold.hi:
+        return float(value - threshold.hi)
+    if threshold.lo is not None and value < threshold.lo:
+        return float(threshold.lo - value)
+    return 0.0
+
+
+def _dedupe_breaches(
+    breaches: list[tuple[str, float, str]],
+) -> list[tuple[str, float, str]]:
+    """Collapses duplicate channel alerts and keeps the most severe value per channel."""
+    deduped: dict[str, tuple[str, float, str]] = {}
+    for col, val, reason in breaches:
+        previous = deduped.get(col)
+        if previous is None:
+            deduped[col] = (col, val, reason)
+            continue
+        _, prev_val, _ = previous
+        if _breach_severity(col, val) >= _breach_severity(col, prev_val):
+            deduped[col] = (col, val, reason)
+    return list(deduped.values())
+
+
 @dataclass(frozen=True)
 class ApiServiceConfig:
     """Configuration for API inference workflow.
@@ -203,6 +233,7 @@ class InferenceAPIService:
         self._active_breaches: set[str] = set()
         self._alert_buffer: list[tuple[str, float, str]] = []  # (col, val, reason)
         self._buffer_flush_at: float = 0.0
+        self._sensor_last_alert_sent_at: dict[str, float] = {}
         self._persistent_alert_sent_at: dict[str, float] = {}
 
         # Protected by _lock.
@@ -489,7 +520,7 @@ class InferenceAPIService:
 
         latest = clean_df.iloc[-1]
         now_mono = time.monotonic()
-        breaches = self._evaluate_sensor_alerts(latest)
+        breaches = _dedupe_breaches(self._evaluate_sensor_alerts(latest))
         current_breach_cols = {col for col, _, _ in breaches}
 
         # Always log every breach to Supabase regardless of Telegram state.
@@ -510,10 +541,24 @@ class InferenceAPIService:
         for col, val, reason in breaches:
             if col not in self._active_breaches:
                 self._active_breaches.add(col)
-                self._persistent_alert_sent_at[col] = now_mono
-                self._alert_buffer.append((col, val, reason))
-                if self._buffer_flush_at == 0.0:
-                    self._buffer_flush_at = now_mono + _ALERT_BUFFER_WINDOW_SECONDS
+                last_sent = self._sensor_last_alert_sent_at.get(col, 0.0)
+                if now_mono - last_sent >= _SENSOR_ALERT_COOLDOWN_SECONDS:
+                    self._sensor_last_alert_sent_at[col] = now_mono
+                    self._persistent_alert_sent_at[col] = now_mono
+                    self._alert_buffer.append((col, val, reason))
+                    if self._buffer_flush_at == 0.0:
+                        self._buffer_flush_at = now_mono + _ALERT_BUFFER_WINDOW_SECONDS
+                else:
+                    # Keep breach as active but suppress noisy re-alerts inside cooldown.
+                    self._persistent_alert_sent_at[col] = max(
+                        self._persistent_alert_sent_at.get(col, 0.0),
+                        last_sent,
+                    )
+                    logger.info(
+                        "Alert suppressed by cooldown: %s (%.0fs remaining)",
+                        col,
+                        max(0.0, _SENSOR_ALERT_COOLDOWN_SECONDS - (now_mono - last_sent)),
+                    )
             else:
                 last_sent = self._persistent_alert_sent_at.get(col, 0.0)
                 if now_mono - last_sent > _PERSISTENT_REALERT_SECONDS:
@@ -547,8 +592,12 @@ class InferenceAPIService:
 
         # Flush buffer once the window expires.
         if self._alert_buffer and self._buffer_flush_at > 0.0 and now_mono >= self._buffer_flush_at:
-            new_items = [(c, v, r) for c, v, r in self._alert_buffer if not r.startswith("\x00")]
-            reminder_items = [(c, v, r[1:]) for c, v, r in self._alert_buffer if r.startswith("\x00")]
+            new_items = _dedupe_breaches(
+                [(c, v, r) for c, v, r in self._alert_buffer if not r.startswith("\x00")]
+            )
+            reminder_items = _dedupe_breaches(
+                [(c, v, r[1:]) for c, v, r in self._alert_buffer if r.startswith("\x00")]
+            )
             dt = _now_ict()
             if new_items:
                 lines = _build_alert_lines(new_items)
@@ -606,7 +655,7 @@ class InferenceAPIService:
         with self._lock:
             if now < self._ae_cooldown_until:
                 return
-            self._ae_cooldown_until = now + _ALERT_COOLDOWN_SECONDS
+            self._ae_cooldown_until = now + _AE_ALERT_COOLDOWN_SECONDS
 
         top = ", ".join(f"{f} ({e:.3f})" for f, e in result.top_features)
         dt  = _now_ict()

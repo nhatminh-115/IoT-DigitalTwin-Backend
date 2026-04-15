@@ -18,7 +18,7 @@ def main() -> None:
 
     fig, ax = plt.subplots(figsize=(14, 8))
     ax.imshow(mpimg.imread(args.image))
-    ax.set_title(f"Click vi tri node [{NODES[0]}]  ({len(NODES)} nodes con lai)   |  Chuot phai = skip (node bi khuat)")
+    ax.set_title(f"Click node position [{NODES[0]}]  ({len(NODES)} nodes remaining)   |  Right click = skip (occluded node)")
     ax.axis("on")
 
     def _advance(node: str, skipped: bool) -> None:
@@ -32,15 +32,15 @@ def main() -> None:
                 json.dump(coords, f, indent=2)
             visible = len(coords)
             print(f"Saved {visible}/{len(NODES)} nodes -> {args.output}")
-            ax.set_title(f"Done! Da luu {visible}/{len(NODES)} nodes -> {args.output}")
+            ax.set_title(f"Done! Saved {visible}/{len(NODES)} nodes -> {args.output}")
             fig.canvas.draw()
             plt.pause(1.5)
             plt.close(fig)
         else:
             next_node = NODES[idx_state[0]]
             ax.set_title(
-                f"Click vi tri node [{next_node}]  ({remaining} nodes con lai)"
-                f"   |  Chuot phai = skip (node bi khuat)"
+                f"Click node position [{next_node}]  ({remaining} nodes remaining)"
+                f"   |  Right click = skip (occluded node)"
             )
             fig.canvas.draw()
 

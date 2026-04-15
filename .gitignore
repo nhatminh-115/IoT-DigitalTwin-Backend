@@ -12,6 +12,8 @@ test_ae.py
 *.png
 .claude/
 *.mp4
-test_*.py
+/test_*.py
 frontend-web/
 scratch/
+.pytest_cache/
+stuff/

@@ -27,6 +27,7 @@ from .anomaly_detector import AnomalyDetector
 from .llm_service import AIAssistant
 from . import viz_engine
 from .video_generator import generate_video, video_path, CSV_URL as _VIDEO_CSV_URL
+from . import worker_state
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,7 @@ class InferenceAPIService:
     """Provides thread-safe inference and retraining methods for REST endpoints."""
 
     def __init__(self, config: ApiServiceConfig) -> None:
-        print("InferenceAPIService init with AE support")
+        logger.info("InferenceAPIService init with AE support")
         """Initializes service dependencies and state."""
         self._config = config
         self._fetcher = DataFetcher(DataFetcherConfig(csv_url=config.csv_url))
@@ -218,7 +219,7 @@ class InferenceAPIService:
                 meta_path=config.checkpoint_path.parent / "autoencoder_meta.json",
             )
         except Exception as exc:
-            print(f"AnomalyDetector init failed (non-fatal): {exc}")
+            logger.warning("AnomalyDetector init failed (non-fatal): %s", exc)
             self._anomaly_detector = None
         self._ae_cooldown_until: float = 0.0   # suppress repeat AE alerts for 1h
 
@@ -242,6 +243,7 @@ class InferenceAPIService:
         self._checkpoint_checked = False
         self._last_error: str | None = None
         self._last_prediction_utc: str | None = None
+        self._last_fetch_utc: str | None = None
         self._lock = threading.RLock()
 
         self._cached_clean_df: pd.DataFrame | None = None
@@ -283,6 +285,8 @@ class InferenceAPIService:
         except Exception as exc:
             logger.warning("AIAssistant init failed (non-fatal): %s", exc)
 
+        self._app_mode = os.environ.get("APP_MODE", "combined")
+
         self._bg_thread = threading.Thread(
             target=self._background_fetch_loop, daemon=True, name="bg-fetch"
         )
@@ -291,7 +295,8 @@ class InferenceAPIService:
         self._tg_thread = threading.Thread(
             target=self._telegram_polling_loop, daemon=True, name="tg-poll"
         )
-        self._tg_thread.start()
+        if self._app_mode in ("combined", "worker"):
+            self._tg_thread.start()
 
     def _background_fetch_loop(self) -> None:
         """Continuously fetches and caches clean data; pre-warms the predictor.
@@ -311,21 +316,44 @@ class InferenceAPIService:
                         self._last_error = f"Background Model Prep Error: {exc}"
 
                     self._cached_clean_df = clean_df
+                    self._last_fetch_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
                     if not self._last_error or "Prep Error" not in self._last_error:
                         self._last_error = None
 
-                self._check_and_send_alerts(clean_df)
-                self._check_and_send_hourly_report(clean_df)
-                self._check_autoencoder_anomaly(clean_df)
-                self._check_and_generate_daily_video()
+                if self._app_mode != "api":
+                    self._check_and_send_alerts(clean_df)
+                    self._check_and_send_hourly_report(clean_df)
+                    self._check_autoencoder_anomaly(clean_df)
+                    self._check_and_generate_daily_video()
+
+                # Publish state for API processes to read via /health.
+                if self._app_mode in ("combined", "worker"):
+                    with self._lock:
+                        _state_snapshot = {
+                            "last_fetch_utc": self._last_fetch_utc,
+                            "last_error": self._last_error,
+                            "cache_rows": (
+                                int(len(self._cached_clean_df))
+                                if self._cached_clean_df is not None
+                                else None
+                            ),
+                            "model_fitted": self._predictor.is_fitted,
+                            "bg_thread_alive": True,
+                            "tg_thread_alive": self._tg_thread.is_alive(),
+                        }
+                    try:
+                        worker_state.write_state(_state_snapshot)
+                    except Exception as exc:
+                        logger.warning("worker_state write failed: %s", exc)
 
             except Exception as exc:
                 with self._lock:
                     self._last_error = f"Background Fetch Error: {exc}"
 
             # Upsert system heartbeat every 10 iterations (~5 minutes at 30s cadence).
+            # Only the worker/combined process should own the heartbeat record.
             _heartbeat_counter += 1
-            if _heartbeat_counter >= 10:
+            if _heartbeat_counter >= 10 and self._app_mode != "api":
                 _heartbeat_counter = 0
                 with self._lock:
                     _last_err = self._last_error
@@ -378,7 +406,7 @@ class InferenceAPIService:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 resp.read()  # consume body to allow keep-alive reuse
         except Exception as exc:
-            print(f"Telegram send error: {exc}")
+            logger.error("Telegram send error: %s", exc)
 
     def _send_telegram_photo(
         self,
@@ -812,7 +840,7 @@ class InferenceAPIService:
                             self._dispatch_viz_command(text, **ctx)
 
             except Exception as exc:
-                print(f"Telegram polling error: {exc}")
+                logger.error("Telegram polling error: %s", exc)
                 self._stop_event.wait(timeout=5.0)
 
     # ── Regex-based viz dispatcher ─────────────────────────────────────────
@@ -1315,14 +1343,99 @@ class InferenceAPIService:
 
     def health(self) -> dict[str, Any]:
         """Returns runtime health information for service monitoring."""
-        with self._lock:
+        if self._app_mode == "api":
+            return self._health_from_worker_state()
+        return self._health_local()
+
+    def _health_from_worker_state(self) -> dict[str, Any]:
+        """Health derived from the shared state file written by the worker process."""
+        state = worker_state.read_state()
+        if state is None:
             return {
-                "status": "ok",
+                "status": "unhealthy",
+                "last_error": "Worker state unavailable: state file missing or corrupt.",
+                "bg_thread_alive": False,
+                "tg_thread_alive": False,
+                "cache_rows": None,
+                "model_fitted": self._predictor.is_fitted,
+                "checkpoint_path": self._config.checkpoint_path.as_posix(),
+                "checkpoint_checked": self._checkpoint_checked,
+                "last_prediction_utc": self._last_prediction_utc,
+                "last_fetch_utc": None,
+                "data_age_seconds": None,
+            }
+
+        last_fetch_utc: str | None = state.get("last_fetch_utc")
+        data_age_seconds: int | None = None
+        if last_fetch_utc:
+            try:
+                last_fetch_dt = datetime.fromisoformat(last_fetch_utc)
+                if last_fetch_dt.tzinfo is None:
+                    last_fetch_dt = last_fetch_dt.replace(tzinfo=timezone.utc)
+                data_age_seconds = max(0, int((datetime.now(timezone.utc) - last_fetch_dt).total_seconds()))
+            except ValueError:
+                data_age_seconds = None
+
+        bg_alive: bool = state.get("bg_thread_alive", False)
+        last_error: str | None = state.get("last_error")
+
+        if (not bg_alive) or (data_age_seconds is not None and data_age_seconds > 900):
+            status = "unhealthy"
+        elif last_error or data_age_seconds is None or data_age_seconds >= 300:
+            status = "degraded"
+        else:
+            status = "ok"
+
+        return {
+            "status": status,
+            "model_fitted": state.get("model_fitted", self._predictor.is_fitted),
+            "checkpoint_path": self._config.checkpoint_path.as_posix(),
+            "checkpoint_checked": self._checkpoint_checked,
+            "last_prediction_utc": self._last_prediction_utc,
+            "last_error": last_error,
+            "last_fetch_utc": last_fetch_utc,
+            "data_age_seconds": data_age_seconds,
+            "bg_thread_alive": bg_alive,
+            "tg_thread_alive": state.get("tg_thread_alive", False),
+            "cache_rows": state.get("cache_rows"),
+        }
+
+    def _health_local(self) -> dict[str, Any]:
+        """Health derived from local thread and cache state (combined/worker mode)."""
+        bg_thread_alive = self._bg_thread.is_alive()
+        tg_thread_alive = self._tg_thread.is_alive()
+
+        with self._lock:
+            cache_rows = None if self._cached_clean_df is None else int(len(self._cached_clean_df))
+            data_age_seconds: int | None = None
+            if self._last_fetch_utc:
+                try:
+                    last_fetch_dt = datetime.fromisoformat(self._last_fetch_utc)
+                    if last_fetch_dt.tzinfo is None:
+                        last_fetch_dt = last_fetch_dt.replace(tzinfo=timezone.utc)
+                    age_seconds = (datetime.now(timezone.utc) - last_fetch_dt).total_seconds()
+                    data_age_seconds = max(0, int(age_seconds))
+                except ValueError:
+                    data_age_seconds = None
+
+            status = "ok"
+            if (not bg_thread_alive) or (data_age_seconds is not None and data_age_seconds > 900):
+                status = "unhealthy"
+            elif self._last_error or data_age_seconds is None or (data_age_seconds >= 300):
+                status = "degraded"
+
+            return {
+                "status": status,
                 "model_fitted": self._predictor.is_fitted,
                 "checkpoint_path": self._config.checkpoint_path.as_posix(),
                 "checkpoint_checked": self._checkpoint_checked,
                 "last_prediction_utc": self._last_prediction_utc,
                 "last_error": self._last_error,
+                "last_fetch_utc": self._last_fetch_utc,
+                "data_age_seconds": data_age_seconds,
+                "bg_thread_alive": bg_thread_alive,
+                "tg_thread_alive": tg_thread_alive,
+                "cache_rows": cache_rows,
             }
 
     def get_latest_raw_data(self) -> dict[str, Any]:
@@ -1347,7 +1460,7 @@ class InferenceAPIService:
 
             latest_row = clean_df.iloc[-1]
             response = latest_row.to_dict()
-            response["ThoiGian"] = pd.Timestamp(clean_df.index[-1]).strftime("%Y-%m-%d %H:%M:%S")
+            response["Timestamp"] = pd.Timestamp(clean_df.index[-1]).strftime("%Y-%m-%d %H:%M:%S")
 
             # Map Humid back to Hum for Unity's legacy SensorData matching
             remapped = {}

@@ -44,6 +44,7 @@ SUPABASE_KEY    = os.environ["SUPABASE_SERVICE_KEY"]
 TABLE_NAME      = "env_readings"
 FLUSH_INTERVAL  = int(os.environ.get("FLUSH_INTERVAL_SEC", 30))
 FLUSH_BATCH     = int(os.environ.get("FLUSH_BATCH_SIZE", 100))
+QUEUE_MAXSIZE   = int(os.environ.get("QUEUE_MAXSIZE", 10000))
 
 DEVICE_TO_NODE = {
     "esp01": "M1",  "esp04": "M4",  "esp06": "M6",  "esp07": "M7",
@@ -53,7 +54,7 @@ DEVICE_TO_NODE = {
 # ---------------------------------------------------------------------------
 # Shared state
 # ---------------------------------------------------------------------------
-record_queue: queue.Queue = queue.Queue()
+record_queue: queue.Queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 shutdown_event = threading.Event()
 
 # ---------------------------------------------------------------------------
@@ -109,7 +110,10 @@ def on_disconnect(client, userdata, rc, properties=None):
 def on_message(client, userdata, msg):
     record = parse_message(msg.topic, msg.payload)
     if record:
-        record_queue.put(record)
+        try:
+            record_queue.put_nowait(record)
+        except queue.Full:
+            log.warning("record_queue full - dropping message from %s", msg.topic)
 
 # ---------------------------------------------------------------------------
 # Flush worker
@@ -136,7 +140,14 @@ def flush_worker(supabase):
                 except Exception as e:
                     log.error(f"Supabase upsert failed: {e} — re-queuing")
                     for r in batch:
-                        record_queue.put(r)
+                        try:
+                            record_queue.put_nowait(r)
+                        except queue.Full:
+                            log.warning(
+                                "record_queue full during re-queue - dropping record node=%s ts=%s",
+                                r.get("node_id"),
+                                r.get("ts"),
+                            )
 
             last_flush = time.monotonic()
 

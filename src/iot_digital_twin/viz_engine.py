@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +19,8 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from .predictor import DeepTimeSeriesPredictor
+
+logger = logging.getLogger(__name__)
 
 # ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -132,9 +135,12 @@ def _ensure_campus_images() -> None:
                 repo_type="dataset",
                 local_dir=str(_PROJECT_ROOT),
             )
-            print(f"Downloaded {fname} -> {local}")
+            logger.info("Downloaded %s -> %s", fname, local)
     except Exception as exc:
-        print(f"Could not download campus images (heatmap will use grid fallback): {exc}")
+        logger.warning(
+            "Could not download campus images (heatmap will use grid fallback): %s",
+            exc,
+        )
 
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────

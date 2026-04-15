@@ -105,10 +105,10 @@ Alerts         : none
 
 | Intent | Trigger keywords | Data window |
 |---|---|---|
-| `module_status` | "chết", "offline", "module nào", "trạng thái" | 5 rows (~15 min) |
+| `module_status` | "dead", "offline", "which module", "status" | 5 rows (~15 min) |
 | `current` | _(default)_ | 10 rows (~30 min) |
-| `trend` | "xu hướng", "sáng nay", "6h", "giờ qua" | 120 rows (~6h) |
-| `today` | "hôm nay", "cả ngày", "24h" | 480 rows (~24h) |
+| `trend` | "trend", "this morning", "6h", "past hour" | 120 rows (~6h) |
+| `today` | "today", "all day", "24h" | 480 rows (~24h) |
 
 **Dead node detection:** node is marked silent if no reading in the last **60 minutes**.
 

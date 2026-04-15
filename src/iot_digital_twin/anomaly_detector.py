@@ -12,12 +12,16 @@ Usage in api_service.py background loop:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +94,11 @@ class AnomalyDetector:
             torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         )
         self._model.eval()
-        print(f"AnomalyDetector ready: {self.n_features} features, threshold={self.threshold:.4f}")
+        logger.info(
+            "AnomalyDetector ready: %s features, threshold=%.4f",
+            self.n_features,
+            self.threshold,
+        )
 
     def _normalize(self, arr: np.ndarray) -> np.ndarray:
         return (arr - self._mean) / self._scale

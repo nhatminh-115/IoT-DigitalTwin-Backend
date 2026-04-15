@@ -13,40 +13,60 @@ logger = logging.getLogger(__name__)
 
 _ALL_NODES = ["M1", "M4", "M6", "M7", "M8", "M9", "M10", "M11"]
 
-_THRESHOLD_CONTEXT = """
-Safety thresholds for UEH Campus V:
-- Temperature: 18–33 °C (below 18 = too cold, above 33 = too hot)
-- Humidity: 30–75 % (below 30 = severely dry, above 75 = hyper-humid)
-- CO2: safe below 1000 ppm, concerning 1000–1200 ppm, toxic above 1200 ppm
-- TVOC: safe below 150 ppb, concerning 150–300 ppb, hazardous above 300 ppb
-""".strip()
+def _metric_thresholds() -> dict[str, tuple[float | None, float | None]]:
+    """Lazily maps api_service thresholds into LLM metric names.
 
-_SYSTEM_PROMPT = f"""
-Bạn là trợ lý AI giám sát môi trường thông minh cho UEH Campus V (Đại học Kinh tế TP.HCM).
-Campus có 8 nodes cảm biến: M1, M4, M6, M7, M8, M9, M10, M11.
-Mỗi node đo: nhiệt độ (°C), độ ẩm (%), CO2 (ppm), TVOC (ppb).
+    Local import avoids circular import at module load time:
+    api_service imports this module to initialize AIAssistant.
+    """
+    from .api_service import _SENSOR_THRESHOLDS
 
-{_THRESHOLD_CONTEXT}
+    thresholds: dict[str, tuple[float | None, float | None]] = {}
+    for suffix, bounds in _SENSOR_THRESHOLDS.items():
+        thresholds[suffix.lstrip("_")] = (bounds.lo, bounds.hi)
+    return thresholds
 
-Quy tắc trả lời:
-- Trả lời bằng tiếng Việt, ngắn gọn, chuyên nghiệp.
-- Luôn dùng dữ liệu gần nhất có sẵn trong context. Ghi rõ timestamp của reading cuối.
-- Chỉ nói "không có dữ liệu" nếu phần DATA bên dưới thực sự trống.
-- Không bịa đặt số liệu.
-- Đưa ra nhận xét ngắn về mức độ an toàn dựa trên ngưỡng chuẩn.
-- Ưu tiên đọc phần SUMMARY để trả lời nhanh; dùng DATA TABLE để trích dẫn số cụ thể.
+
+def _build_threshold_context() -> str:
+    thresholds = _metric_thresholds()
+    lines = ["Safety thresholds for UEH Campus V:"]
+    metric_specs = [
+        ("Temp", "Temperature", "°C"),
+        ("Humid", "Humidity", "%"),
+        ("CO2", "CO2", "ppm"),
+        ("TVOC", "TVOC", "ppb"),
+    ]
+    for metric_key, metric_label, unit in metric_specs:
+        lo, hi = thresholds.get(metric_key, (None, None))
+        if lo is not None and hi is not None:
+            lines.append(f"- {metric_label}: {lo:g}–{hi:g} {unit}")
+        elif lo is None and hi is not None:
+            lines.append(f"- {metric_label}: <= {hi:g} {unit}")
+        elif lo is not None and hi is None:
+            lines.append(f"- {metric_label}: >= {lo:g} {unit}")
+    return "\n".join(lines)
+
+
+def _build_system_prompt() -> str:
+    threshold_context = _build_threshold_context()
+    return f"""
+You are an AI assistant for smart environmental monitoring at UEH Campus V (University of Economics Ho Chi Minh City).
+The campus has 8 sensor nodes: M1, M4, M6, M7, M8, M9, M10, M11.
+Each node measures: temperature (°C), humidity (%), CO2 (ppm), TVOC (ppb).
+
+{threshold_context}
+
+Response guidelines:
+- Respond in Vietnamese, concise, and professional.
+- Always use the most recent data available in the context. Specify the timestamp of the latest reading.
+- Only say "no data" if the DATA section below is actually empty.
+- Do not fabricate numbers.
+- Provide a brief assessment of safety levels based on standard thresholds.
+- Prioritize reading the SUMMARY section for quick responses; use the DATA TABLE to cite specific figures.
 """.strip()
 
 # Frozen detection: 2 h = 40 rows at 3-min cadence.
 _FROZEN_ROWS = 40
-
-# Threshold table for Python-side alert detection (mirrors api_service).
-_THRESHOLDS: dict[str, tuple[float | None, float | None]] = {
-    "Temp":  (18.0, 33.0),
-    "Humid": (30.0, 75.0),
-    "CO2":   (None, 1200.0),
-    "TVOC":  (None, 300.0),
-}
 
 
 # ---------------------------------------------------------------------------
@@ -128,11 +148,11 @@ class SheetContextFetcher:
     @staticmethod
     def _detect_intent(query: str) -> str:
         q = query.lower()
-        status_kw = ("chết", "offline", "mất kết nối", "không hoạt động", "còn sống",
-                     "module nào", "node nào", "status", "trạng thái")
-        trend_kw  = ("xu hướng", "trend", "biến động", "thay đổi", "lịch sử",
-                     "sáng nay", "chiều nay", "tối nay", "6h", "giờ qua", "tiếng")
-        today_kw  = ("hôm nay", "today", "ngày hôm nay", "cả ngày", "24h")
+        status_kw = ("dead", "offline", "disconnected", "not working", "alive",
+                     "which module", "which node", "status", "state")
+        trend_kw  = ("trend", "fluctuation", "change", "history",
+                     "this morning", "this afternoon", "this evening", "6h", "past hour", "hours")
+        today_kw  = ("today", "all day", "24h")
         if any(k in q for k in status_kw):
             return "module_status"
         if any(k in q for k in trend_kw):
@@ -182,15 +202,16 @@ class SheetContextFetcher:
         """Returns alert strings for the latest row that breach known thresholds."""
         latest = df.iloc[-1]
         alerts = []
+        thresholds = _metric_thresholds()
         for col in latest.index:
             col_str = str(col)
-            metric = next((m for m in _THRESHOLDS if col_str.endswith(f"_{m}")), None)
+            metric = next((m for m in thresholds if col_str.endswith(f"_{m}")), None)
             if metric is None:
                 continue
             val = latest[col_str]
             if pd.isna(val):
                 continue
-            lo, hi = _THRESHOLDS[metric]
+            lo, hi = thresholds[metric]
             if hi is not None and float(val) > hi:
                 alerts.append(f"{col_str}={val:.1f} [HIGH]")
             elif lo is not None and float(val) < lo:
@@ -263,7 +284,7 @@ class SheetContextFetcher:
     def build_context(self, query: str) -> str:
         df = self._get_df()
         if df is None or df.empty:
-            return "Không có dữ liệu cảm biến. Hệ thống đang khởi động."
+            return "No sensor data is available. The system is starting up."
 
         intent = self._detect_intent(query)
         node   = self._extract_node(query)
@@ -304,12 +325,13 @@ class GroqClient:
             raise ImportError("groq package is required: pip install groq>=0.9.0") from exc
 
     def ask(self, user_query: str, context: str) -> dict:
-        user_message = f"Dữ liệu cảm biến:\n\n{context}\n\nCâu hỏi: {user_query}"
+        user_message = f"Sensor data:\n\n{context}\n\nQuestion: {user_query}"
+        system_prompt = _build_system_prompt()
         t0 = time.monotonic()
         completion = self._client.chat.completions.create(
             model=self._MODEL,
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_message},
             ],
             max_tokens=self._MAX_TOKENS,

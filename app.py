@@ -18,6 +18,7 @@ from src.iot_digital_twin.data_fetcher import DataFetchError, DataFetcher, DataF
 from src.iot_digital_twin.data_quality_gate import DataQualityError, DataQualityGate, DataQualityReport
 from src.iot_digital_twin.model_evaluator import EvaluationArtifacts, EvaluationError, ModelEvaluator
 from src.iot_digital_twin.predictor import DeepTimeSeriesPredictor, PredictorConfig, PredictorError
+from src.iot_digital_twin import weather_client
 
 
 CSV_URL = (
@@ -217,6 +218,9 @@ class StreamlitDashboard:
 
         st_autorefresh(interval=int(refresh_millis), key="dashboard_autorefresh")
 
+        # Weather context strip
+        self._render_weather_strip()
+
         # Pipeline
         try:
             if not st.session_state.checkpoint_loaded:
@@ -298,6 +302,38 @@ class StreamlitDashboard:
         except Exception as exc:
             st.error(f"Unexpected runtime failure: {exc}")
             st.text(traceback.format_exc())
+
+    # -------------------------------------------------------------------------
+    # Weather display
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _render_weather_strip() -> None:
+        """Render a compact current-weather strip using the campus coordinates."""
+        import json
+        from pathlib import Path as _Path
+
+        config_path = _Path("config/outdoor_nodes.json")
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            campus = cfg.get("campus_latlon", {})
+            lat, lon = campus.get("lat"), campus.get("lon")
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            return  # config missing — skip silently
+
+        if not lat or not lon:
+            return
+
+        current = weather_client.get_current(lat, lon)
+        if current is None:
+            st.caption("Weather unavailable (Open-Meteo unreachable)")
+            return
+
+        col_desc, col_temp, col_humid, col_wind = st.columns([3, 1, 1, 1])
+        col_desc.caption(f"Campus weather — {current.description}")
+        col_temp.metric("Outdoor temp", f"{current.temperature_c:.1f} °C")
+        col_humid.metric("Outdoor humidity", f"{current.humidity_pct:.0f} %")
+        col_wind.metric("Wind", f"{current.wind_speed_kmh:.1f} km/h")
 
     # -------------------------------------------------------------------------
     # Module helpers

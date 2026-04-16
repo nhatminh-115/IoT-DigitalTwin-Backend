@@ -28,8 +28,24 @@ from .llm_service import AIAssistant
 from . import viz_engine
 from .video_generator import generate_video, video_path, CSV_URL as _VIDEO_CSV_URL
 from . import worker_state
+from . import weather_client
 
 logger = logging.getLogger(__name__)
+
+_OUTDOOR_CONFIG_PATH = Path("config/outdoor_nodes.json")
+_WEATHER_SANITY_COOLDOWN_SECONDS = 14400  # 4 hours between repeated sensor-drift alerts
+
+
+def _load_outdoor_config() -> dict[str, Any]:
+    """Load outdoor node config. Returns empty config if file is missing."""
+    try:
+        return json.loads(_OUTDOOR_CONFIG_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.warning("outdoor_nodes.json not found — weather sanity check disabled")
+        return {}
+    except json.JSONDecodeError as exc:
+        logger.warning("outdoor_nodes.json parse error: %s — weather sanity check disabled", exc)
+        return {}
 
 
 class ApiServiceError(RuntimeError):
@@ -236,6 +252,10 @@ class InferenceAPIService:
         self._buffer_flush_at: float = 0.0
         self._sensor_last_alert_sent_at: dict[str, float] = {}
         self._persistent_alert_sent_at: dict[str, float] = {}
+        self._weather_sanity_alerted_at: dict[str, float] = {}  # node_metric → last alert ts
+
+        # Outdoor node config for weather sanity check (loaded once at init).
+        self._outdoor_config: dict[str, Any] = _load_outdoor_config()
 
         # Protected by _lock.
         self._last_report_hour: int = -1
@@ -325,6 +345,7 @@ class InferenceAPIService:
                     self._check_and_send_hourly_report(clean_df)
                     self._check_autoencoder_anomaly(clean_df)
                     self._check_and_generate_daily_video()
+                    self._check_outdoor_sensor_sanity(clean_df)
 
                 # Publish state for API processes to read via /health.
                 if self._app_mode in ("combined", "worker"):
@@ -643,6 +664,77 @@ class InferenceAPIService:
                 self._send_telegram_message(msg)
             self._alert_buffer.clear()
             self._buffer_flush_at = 0.0
+
+    def _check_outdoor_sensor_sanity(self, clean_df: pd.DataFrame) -> None:
+        """Compare outdoor/semi-outdoor node readings against Open-Meteo.
+
+        Fires a Telegram alert when a node deviates beyond its configured threshold,
+        suggesting sensor drift, obstruction, or hardware fault. Each node+metric
+        combination is rate-limited to one alert per _WEATHER_SANITY_COOLDOWN_SECONDS.
+        """
+        if not self._outdoor_config or clean_df.empty or not self._bot_token:
+            return
+
+        campus = self._outdoor_config.get("campus_latlon", {})
+        lat = campus.get("lat")
+        lon = campus.get("lon")
+        nodes_cfg: dict[str, Any] = self._outdoor_config.get("nodes", {})
+        if not lat or not lon or not nodes_cfg:
+            return
+
+        current = weather_client.get_current(lat, lon)
+        if current is None:
+            return  # API unavailable — skip silently, fallback already logged in client
+
+        latest = clean_df.iloc[-1]
+        now = time.monotonic()
+
+        # Mapping from config threshold key to (column suffix, Open-Meteo value)
+        metric_map: dict[str, tuple[str, float]] = {
+            "Temp": ("_Temp", current.temperature_c),
+            "Humid": ("_Humid", current.humidity_pct),
+        }
+
+        alerts: list[str] = []
+        for node_id, node_cfg in nodes_cfg.items():
+            node_type: str = node_cfg.get("type", "outdoor")
+            thresholds: dict[str, float] = node_cfg.get("sanity_thresholds", {})
+
+            for metric, (col_suffix, weather_val) in metric_map.items():
+                threshold = thresholds.get(metric)
+                if threshold is None:
+                    continue
+
+                col = f"{node_id}{col_suffix}"
+                if col not in latest.index:
+                    continue
+
+                sensor_val = float(latest[col])
+                deviation = abs(sensor_val - weather_val)
+                if deviation <= threshold:
+                    continue
+
+                cooldown_key = f"{node_id}_{metric}"
+                last_sent = self._weather_sanity_alerted_at.get(cooldown_key, 0.0)
+                if now - last_sent < _WEATHER_SANITY_COOLDOWN_SECONDS:
+                    continue
+
+                self._weather_sanity_alerted_at[cooldown_key] = now
+                unit = "°C" if metric == "Temp" else "%"
+                label = "outdoor" if node_type == "outdoor" else "semi-outdoor"
+                alerts.append(
+                    f"  {node_id} ({label}) {metric}: sensor={sensor_val:.1f}{unit}, "
+                    f"weather={weather_val:.1f}{unit}, diff={deviation:.1f}{unit}"
+                )
+
+        if alerts:
+            body = "\n".join(alerts)
+            msg = (
+                f"<b>[SENSOR DRIFT?] Outdoor sensor vs weather mismatch</b>\n"
+                f"<pre>{body}</pre>\n"
+                f"Check for obstruction, direct sunlight, or hardware fault."
+            )
+            self._send_telegram_message(msg)
 
     def _check_and_send_hourly_report(self, clean_df: pd.DataFrame) -> None:
         if clean_df.empty or not self._bot_token:

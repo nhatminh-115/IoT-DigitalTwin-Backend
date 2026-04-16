@@ -1,0 +1,44 @@
+{
+  "campus_latlon": {
+    "lat": 10.782792197896685,
+    "lon": 106.6855567966271
+  },
+  "nodes": {
+    "M7": {
+      "type": "outdoor",
+      "sanity_thresholds": {
+        "Temp": 5.0,
+        "Humid": 15.0
+      }
+    },
+    "M1": {
+      "type": "semi_outdoor",
+      "sanity_thresholds": {
+        "Temp": 8.0,
+        "Humid": 20.0
+      }
+    },
+    "M6": {
+      "type": "semi_outdoor",
+      "sanity_thresholds": {
+        "Temp": 8.0,
+        "Humid": 20.0
+      }
+    },
+    "M8": {
+      "type": "semi_outdoor",
+      "sanity_thresholds": {
+        "Temp": 8.0,
+        "Humid": 20.0
+      }
+    },
+    "M11": {
+      "type": "semi_outdoor",
+      "sanity_thresholds": {
+        "Temp": 8.0,
+        "Humid": 20.0
+      }
+    }
+  },
+  "_note": "Threshold là độ lệch tối đa cho phép giữa sensor reading và Open-Meteo. outdoor: chặt hơn vì tiếp xúc trực tiếp. semi_outdoor: rộng hơn vì bị che một phần bởi mái/tường hành lang."
+}

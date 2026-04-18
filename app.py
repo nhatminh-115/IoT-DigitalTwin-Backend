@@ -211,7 +211,7 @@ class StreamlitDashboard:
                     value=180_000, step=30_000,
                 )
                 selected_tail = st.slider("Historical window", 60, 600, 240, 20)
-                eval_horizon = st.slider("Eval horizon (steps)", 240, 3000, 900, 60)
+                eval_horizon = st.slider("Eval horizon (steps)", 240, 3000, 240, 60)
                 mc_samples = st.slider("MC dropout samples", 5, 40, 10, 5)
                 show_advanced_metrics = st.checkbox("Advanced per-feature metrics", value=False)
                 log_rows_to_show = st.slider("Log rows", 50, 5000, 500, 50)

@@ -371,29 +371,30 @@ class InferenceAPIService:
                 with self._lock:
                     self._last_error = f"Background Fetch Error: {exc}"
 
-            # Upsert system heartbeat every 10 iterations (~5 minutes at 30s cadence).
+            # Insert system heartbeat every 10 iterations (~5 minutes at 30s cadence).
             # Only the worker/combined process should own the heartbeat record.
             _heartbeat_counter += 1
             if _heartbeat_counter >= 10 and self._app_mode != "api":
                 _heartbeat_counter = 0
                 with self._lock:
                     _last_err = self._last_error
-                def _upsert_heartbeat(last_error: str | None) -> None:
+                def _insert_heartbeat(last_error: str | None) -> None:
                     try:
                         if self._supabase is None:
                             return
-                        self._supabase.table("system_heartbeat").upsert(
+                        now = datetime.now(timezone.utc)
+                        self._supabase.table("system_heartbeat").insert(
                             {
-                                "id": 1,
-                                "ts": datetime.now(timezone.utc).isoformat(),
+                                "ts": now.isoformat(),
                                 "status": "ok",
                                 "last_error": last_error,
-                            },
-                            on_conflict="id",
+                            }
                         ).execute()
+                        cutoff = (now - timedelta(days=3)).isoformat()
+                        self._supabase.table("system_heartbeat").delete().lt("ts", cutoff).execute()
                     except Exception:
                         pass
-                threading.Thread(target=_upsert_heartbeat, args=(_last_err,), daemon=True).start()
+                threading.Thread(target=_insert_heartbeat, args=(_last_err,), daemon=True).start()
 
             # Throttle to prevent rate-limits from Google Sheets.
             self._stop_event.wait(timeout=30.0)

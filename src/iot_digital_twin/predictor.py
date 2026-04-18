@@ -333,12 +333,20 @@ class DeepTimeSeriesPredictor:
             raise PredictorError("mc_samples must be at least 1.")
 
         assert self._model is not None
-        model_input = torch.from_numpy(batch_windows).float().to(self.device)
+
+        _CHUNK = 128
+
+        def _run_chunks(windows: np.ndarray, training_mode: bool) -> np.ndarray:
+            parts: list[np.ndarray] = []
+            for start in range(0, len(windows), _CHUNK):
+                chunk = torch.from_numpy(windows[start : start + _CHUNK]).float().to(self.device)
+                parts.append(self._model(chunk).cpu().numpy())  # type: ignore[misc]
+            return np.concatenate(parts, axis=0)
 
         if mc_samples == 1:
             self._model.eval()
             with torch.no_grad():
-                deterministic = self._model(model_input).cpu().numpy()
+                deterministic = _run_chunks(batch_windows, training_mode=False)
             sigma = np.zeros_like(deterministic)
             return deterministic, sigma
 
@@ -347,8 +355,7 @@ class DeepTimeSeriesPredictor:
         samples: list[np.ndarray] = []
         with torch.no_grad():
             for _ in range(mc_samples):
-                sample_pred = self._model(model_input).cpu().numpy()
-                samples.append(sample_pred)
+                samples.append(_run_chunks(batch_windows, training_mode=True))
 
         stacked = np.stack(samples, axis=0)
         mean_pred = stacked.mean(axis=0)

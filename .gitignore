@@ -17,3 +17,6 @@ frontend-web/
 scratch/
 .pytest_cache/
 stuff/
+.gitnexus
+AGENTS.md
+CLAUDE.md

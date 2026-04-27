@@ -68,6 +68,9 @@ def parse_message(topic: str, payload_bytes: bytes) -> dict | None:
         log.debug(f"Unknown device '{device}', skipping")
         return None
 
+    if not payload_bytes:
+        return None
+
     try:
         data = json.loads(payload_bytes.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as e:

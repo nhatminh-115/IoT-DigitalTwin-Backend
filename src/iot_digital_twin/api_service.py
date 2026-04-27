@@ -421,12 +421,8 @@ class InferenceAPIService:
             return
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
-            payload = urllib.parse.urlencode(
-                {"chat_id": target, "text": text, "parse_mode": "HTML"}
-            ).encode("utf-8")
-            req = urllib.request.Request(url, data=payload)
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                resp.read()  # consume body to allow keep-alive reuse
+            payload = {"chat_id": target, "text": text, "parse_mode": "HTML"}
+            requests.post(url, data=payload, timeout=(5.0, 15.0))
         except Exception as exc:
             logger.error("Telegram send error: %s", exc)
 
@@ -484,17 +480,15 @@ class InferenceAPIService:
             return None
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
-            payload = json.dumps({
+            payload = {
                 "chat_id": target_chat_id,
                 "text": text,
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": buttons},
-            }).encode("utf-8")
-            req = urllib.request.Request(url, data=payload,
-                                          headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                result = json.loads(resp.read())
-                return result.get("result", {}).get("message_id")
+            }
+            resp = requests.post(url, json=payload, timeout=(5.0, 20.0))
+            result = resp.json()
+            return result.get("result", {}).get("message_id")
         except Exception as exc:
             logger.error("sendInlineKeyboard failed: %s", exc)
             return None
@@ -515,11 +509,7 @@ class InferenceAPIService:
                           "text": text, "parse_mode": "HTML"}
             if buttons is not None:
                 body["reply_markup"] = {"inline_keyboard": buttons}
-            payload = json.dumps(body).encode("utf-8")
-            req = urllib.request.Request(url, data=payload,
-                                          headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                resp.read()
+            requests.post(url, json=body, timeout=(5.0, 20.0))
         except Exception as exc:
             logger.error("editMessageText failed: %s", exc)
 
@@ -529,11 +519,8 @@ class InferenceAPIService:
             return
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/answerCallbackQuery"
-            payload = json.dumps({"callback_query_id": callback_query_id, "text": text}).encode("utf-8")
-            req = urllib.request.Request(url, data=payload,
-                                          headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                resp.read()
+            payload = {"callback_query_id": callback_query_id, "text": text}
+            requests.post(url, json=payload, timeout=(5.0, 15.0))
         except Exception:
             pass
 
@@ -883,13 +870,9 @@ class InferenceAPIService:
             if not self._bot_token or not self._chat_id:
                 continue
             try:
-                url = (
-                    f"https://api.telegram.org/bot{self._bot_token}"
-                    f"/getUpdates?offset={last_update_id}&timeout=30"
-                )
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=35) as resp:
-                    payload: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
+                url = f"https://api.telegram.org/bot{self._bot_token}/getUpdates"
+                resp = requests.get(url, params={"offset": last_update_id, "timeout": 45}, timeout=(5.0, 50.0))
+                payload: dict[str, Any] = resp.json()
 
                 if payload.get("ok"):
                     for update in payload["result"]:

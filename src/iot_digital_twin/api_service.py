@@ -289,8 +289,25 @@ class InferenceAPIService:
         except Exception as exc:
             logger.warning("Supabase logging init failed (non-fatal): %s", exc)
 
-        # Signals background threads to stop gracefully on shutdown.
+        # Background thread state
+        self._bg_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._tg_thread: threading.Thread | None = None
+
+        # Persistent Telegram Session to avoid TLS handshake hangs on AWS/HF NAT Gateway
+        self._tg_session = requests.Session()
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
+        self._tg_session.mount("https://", adapter)
+        self._tg_session.mount("http://", adapter)
+        self._tg_session.headers.update({"User-Agent": "IoT-DigitalTwin-Bot/1.0 (HuggingFace)"})
 
         # Becomes set once valid credentials are detected; avoids busy-wait in polling loop.
         self._credentials_ready = threading.Event()
@@ -429,7 +446,7 @@ class InferenceAPIService:
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
             payload = {"chat_id": target, "text": text, "parse_mode": "HTML"}
-            requests.post(url, data=payload, timeout=25)
+            self._tg_session.post(url, data=payload, timeout=25)
         except Exception as exc:
             logger.error("Telegram send error: %s", exc)
 
@@ -445,7 +462,7 @@ class InferenceAPIService:
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/sendPhoto"
             buf.seek(0)
-            requests.post(
+            self._tg_session.post(
                 url,
                 data={"chat_id": target_chat_id, "caption": caption, "parse_mode": "HTML"},
                 files={"photo": ("chart.png", buf, "image/png")},
@@ -466,7 +483,7 @@ class InferenceAPIService:
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/sendVideo"
             with video_file.open("rb") as f:
-                requests.post(
+                self._tg_session.post(
                     url,
                     data={"chat_id": target_chat_id, "caption": caption,
                           "supports_streaming": "true"},
@@ -493,7 +510,7 @@ class InferenceAPIService:
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": buttons},
             }
-            resp = requests.post(url, json=payload, timeout=25)
+            resp = self._tg_session.post(url, json=payload, timeout=25)
             result = resp.json()
             return result.get("result", {}).get("message_id")
         except Exception as exc:
@@ -516,7 +533,7 @@ class InferenceAPIService:
                           "text": text, "parse_mode": "HTML"}
             if buttons is not None:
                 body["reply_markup"] = {"inline_keyboard": buttons}
-            requests.post(url, json=body, timeout=25)
+            self._tg_session.post(url, json=body, timeout=25)
         except Exception as exc:
             logger.error("editMessageText failed: %s", exc)
 
@@ -527,7 +544,7 @@ class InferenceAPIService:
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/answerCallbackQuery"
             payload = {"callback_query_id": callback_query_id, "text": text}
-            requests.post(url, json=payload, timeout=25)
+            self._tg_session.post(url, json=payload, timeout=25)
         except Exception:
             pass
 
@@ -878,7 +895,7 @@ class InferenceAPIService:
                 continue
             try:
                 url = f"https://api.telegram.org/bot{self._bot_token}/getUpdates"
-                resp = requests.get(url, params={"offset": last_update_id, "timeout": 20}, timeout=30)
+                resp = self._tg_session.get(url, params={"offset": last_update_id, "timeout": 20}, timeout=30)
                 payload: dict[str, Any] = resp.json()
 
                 if payload.get("ok"):

@@ -422,7 +422,7 @@ class InferenceAPIService:
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
             payload = {"chat_id": target, "text": text, "parse_mode": "HTML"}
-            requests.post(url, data=payload, timeout=(5.0, 15.0))
+            requests.post(url, data=payload, timeout=25)
         except Exception as exc:
             logger.error("Telegram send error: %s", exc)
 
@@ -486,7 +486,7 @@ class InferenceAPIService:
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": buttons},
             }
-            resp = requests.post(url, json=payload, timeout=(5.0, 20.0))
+            resp = requests.post(url, json=payload, timeout=25)
             result = resp.json()
             return result.get("result", {}).get("message_id")
         except Exception as exc:
@@ -509,7 +509,7 @@ class InferenceAPIService:
                           "text": text, "parse_mode": "HTML"}
             if buttons is not None:
                 body["reply_markup"] = {"inline_keyboard": buttons}
-            requests.post(url, json=body, timeout=(5.0, 20.0))
+            requests.post(url, json=body, timeout=25)
         except Exception as exc:
             logger.error("editMessageText failed: %s", exc)
 
@@ -520,7 +520,7 @@ class InferenceAPIService:
         try:
             url = f"https://api.telegram.org/bot{self._bot_token}/answerCallbackQuery"
             payload = {"callback_query_id": callback_query_id, "text": text}
-            requests.post(url, json=payload, timeout=(5.0, 15.0))
+            requests.post(url, json=payload, timeout=25)
         except Exception:
             pass
 
@@ -871,7 +871,7 @@ class InferenceAPIService:
                 continue
             try:
                 url = f"https://api.telegram.org/bot{self._bot_token}/getUpdates"
-                resp = requests.get(url, params={"offset": last_update_id, "timeout": 45}, timeout=(5.0, 50.0))
+                resp = requests.get(url, params={"offset": last_update_id, "timeout": 45}, timeout=55)
                 payload: dict[str, Any] = resp.json()
 
                 if payload.get("ok"):

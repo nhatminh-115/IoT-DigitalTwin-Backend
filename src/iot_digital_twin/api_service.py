@@ -249,6 +249,7 @@ class InferenceAPIService:
         # Telegram Bot configuration
         self._bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
         self._chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        self._tg_api_url = os.environ.get("TELEGRAM_API_URL", "https://api.telegram.org").rstrip("/")
 
         # Daily video generation — tracks last generated date to avoid duplicates.
         self._last_video_date: date | None = None
@@ -444,7 +445,7 @@ class InferenceAPIService:
         if not self._bot_token or not target:
             return
         try:
-            url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
+            url = f"{self._tg_api_url}/bot{self._bot_token}/sendMessage"
             payload = {"chat_id": target, "text": text, "parse_mode": "HTML"}
             self._tg_session.post(url, data=payload, timeout=25)
         except Exception as exc:
@@ -460,7 +461,7 @@ class InferenceAPIService:
         if not self._bot_token:
             return
         try:
-            url = f"https://api.telegram.org/bot{self._bot_token}/sendPhoto"
+            url = f"{self._tg_api_url}/bot{self._bot_token}/sendPhoto"
             buf.seek(0)
             self._tg_session.post(
                 url,
@@ -481,7 +482,7 @@ class InferenceAPIService:
         if not self._bot_token:
             return
         try:
-            url = f"https://api.telegram.org/bot{self._bot_token}/sendVideo"
+            url = f"{self._tg_api_url}/bot{self._bot_token}/sendVideo"
             with video_file.open("rb") as f:
                 self._tg_session.post(
                     url,
@@ -503,7 +504,7 @@ class InferenceAPIService:
         if not self._bot_token:
             return None
         try:
-            url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
+            url = f"{self._tg_api_url}/bot{self._bot_token}/sendMessage"
             payload = {
                 "chat_id": target_chat_id,
                 "text": text,
@@ -528,7 +529,7 @@ class InferenceAPIService:
         if not self._bot_token:
             return
         try:
-            url = f"https://api.telegram.org/bot{self._bot_token}/editMessageText"
+            url = f"{self._tg_api_url}/bot{self._bot_token}/editMessageText"
             body: dict = {"chat_id": chat_id, "message_id": message_id,
                           "text": text, "parse_mode": "HTML"}
             if buttons is not None:
@@ -542,7 +543,7 @@ class InferenceAPIService:
         if not self._bot_token:
             return
         try:
-            url = f"https://api.telegram.org/bot{self._bot_token}/answerCallbackQuery"
+            url = f"{self._tg_api_url}/bot{self._bot_token}/answerCallbackQuery"
             payload = {"callback_query_id": callback_query_id, "text": text}
             self._tg_session.post(url, json=payload, timeout=25)
         except Exception:
@@ -894,7 +895,7 @@ class InferenceAPIService:
             if not self._bot_token or not self._chat_id:
                 continue
             try:
-                url = f"https://api.telegram.org/bot{self._bot_token}/getUpdates"
+                url = f"{self._tg_api_url}/bot{self._bot_token}/getUpdates"
                 resp = self._tg_session.get(url, params={"offset": last_update_id, "timeout": 20}, timeout=30)
                 payload: dict[str, Any] = resp.json()
 

@@ -878,7 +878,7 @@ class InferenceAPIService:
                 continue
             try:
                 url = f"https://api.telegram.org/bot{self._bot_token}/getUpdates"
-                resp = requests.get(url, params={"offset": last_update_id, "timeout": 45}, timeout=55)
+                resp = requests.get(url, params={"offset": last_update_id, "timeout": 20}, timeout=30)
                 payload: dict[str, Any] = resp.json()
 
                 if payload.get("ok"):
@@ -1210,7 +1210,8 @@ class InferenceAPIService:
             text_reply: str | None = None
 
             if kind == "chart":
-                range_str, node, metric = groups
+                range_str, node_raw, metric = groups
+                node = "all" if node_raw == "all" else node_raw.upper()
                 buf = viz_engine.chart(df, range_str, node, metric)
                 node_label = "all" if node == "all" else node.upper()
                 caption = f"/chart_{range_str}_{node_label}_{metric}"

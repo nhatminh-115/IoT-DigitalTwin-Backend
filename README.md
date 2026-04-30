@@ -21,22 +21,35 @@ Backend service, real-time forecasting dashboard, and AI assistant for the UEH C
 ## Architecture Overview
 
 ```
+Main runtime path
+
 HomeAssistant (3-min cadence)
-        |
-        v
+  |
+  v
 Google Sheets (CSV export)
-        |
-        v
-DataFetcher --> DataQualityGate --> InferenceAPIService
-                                         |
-                      +------------------+------------------+
-                      |                  |                  |
-                 LSTM Predictor    AnomalyDetector    Telegram Bot
-                 (forecasting)     (autoencoder)      (/ask AI)
-                      |                  |                  |
-                  FastAPI            Alerts           AIAssistant
-                  endpoints                          (Groq LLM)
+  |
+  v
+DataFetcher -> DataQualityGate -> InferenceAPIService (background loop every 30s)
+             |
+             +-> LSTM Predictor -> FastAPI endpoints (/latest, /predict/latest, /unity/*)
+             +-> Autoencoder -> anomaly alerts
+             +-> Telegram polling -> commands (/chart, /predict, /ask, ...)
+             |        |
+             |        +-> AIAssistant (Groq) using cached clean DataFrame context
+             +-> Hourly report + daily video + weather sanity checks
+             +-> Optional Supabase logs (alert_logs, bot_logs, system_heartbeat)
+
+Parallel web UI path
+
+Google Sheets -> DataFetcher -> DataQualityGate -> Streamlit app (app.py, port 8503)
+                 -> local predictor/evaluator for dashboard charts
+
+Optional ingestion path (independent)
+
+HiveMQ MQTT (esp/+) -> mqtt_worker.py -> Supabase table env_readings
 ```
+
+Note: current forecasting/alert API flow uses Google Sheets as the primary data source. MQTT -> Supabase is currently an optional side pipeline and is not wired into InferenceAPIService fetch logic.
 
 ## Components
 

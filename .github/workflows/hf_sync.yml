@@ -3,6 +3,16 @@ name: Sync to Hugging Face Hub
 on:
   push:
     branches: [ main ]
+    # Ignore non-critical files
+    paths-ignore:
+      - '**.md'                    # README, RUNNING, CLAUDE, AGENTS, etc
+      - '.gitignore'
+      - 'frontend-web/**'          # Frontend assets (separate deployment)
+      - 'scratch/**'               # Scratch/temp files
+      - 'tests/**'                 # Test files (not needed in production)
+      - '.github/workflows/**'      # Workflow files
+      - 'docker/**'                # Docker config (optional)
+      - 'config/**'                # Config files (static, rarely change)
   # Allow manual trigger from the Actions tab
   workflow_dispatch:
 

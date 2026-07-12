@@ -12,7 +12,7 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from src.iot_digital_twin.api_service import ApiServiceConfig, ApiServiceError, InferenceAPIService
 from src.iot_digital_twin import viz_engine
@@ -247,3 +247,13 @@ async def post_command(request: Request):
 @app.get("/command")
 def get_command():
     return latest_command
+
+
+@app.get("/control", response_class=HTMLResponse)
+def get_control_page():
+    import os
+    file_path = os.path.join(os.path.dirname(__file__), "remote_control_dashboard.html")
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read(), status_code=200)
+    return HTMLResponse(content="Dashboard HTML file not found.", status_code=404)

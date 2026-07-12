@@ -224,3 +224,26 @@ def get_heatmap(metric: str) -> StreamingResponse:
     except Exception as exc:
         logger.exception("Error generating heatmap metric=%s", metric)
         raise HTTPException(status_code=500, detail="Error generating heatmap.") from exc
+
+
+# ===== REMOTE CONTROL COMMANDS =====
+import time
+latest_command = {"metric": "home", "timestamp": 0.0}
+
+@app.post("/api/command")
+async def post_command(request: Request):
+    global latest_command
+    try:
+        data = await request.json()
+        metric = data.get("metric", "home")
+        latest_command = {
+            "metric": metric,
+            "timestamp": time.time()
+        }
+        return {"status": "success", "command": latest_command}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/command")
+def get_command():
+    return latest_command

@@ -230,7 +230,7 @@ def get_heatmap(metric: str) -> StreamingResponse:
 import time
 latest_command = {"metric": "home", "timestamp": 0.0}
 
-@app.post("/api/command")
+@app.post("/command")
 async def post_command(request: Request):
     global latest_command
     try:
@@ -244,6 +244,6 @@ async def post_command(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/api/command")
+@app.get("/command")
 def get_command():
     return latest_command

@@ -105,7 +105,7 @@ class DataFetcher:
                 "for seasonal alignment and time-axis plotting."
             )
 
-        dataframe[timestamp_col] = pd.to_datetime(dataframe[timestamp_col], errors="coerce")
+        dataframe[timestamp_col] = pd.to_datetime(dataframe[timestamp_col], errors="coerce", dayfirst=True)
         dataframe = dataframe.dropna(subset=[timestamp_col])
         if dataframe.empty:
             raise DataFetchError("All timestamp values are invalid after datetime parsing.")
@@ -143,7 +143,7 @@ class DataFetcher:
         if col_pm10: renamed[col_pm10] = 'PM10'; metrics_found.append('PM10')
 
         dataframe = dataframe.rename(columns=renamed)
-        dataframe = dataframe[['Device'] + metrics_found]
+        dataframe = dataframe[[timestamp_col, 'Device'] + metrics_found]
 
         # Normalize numeric metrics
         for m in metrics_found:
@@ -220,7 +220,7 @@ class DataFetcher:
         best_col: str | None = None
         best_score = -1.0
         for column in candidate_cols:
-            parsed = pd.to_datetime(dataframe[column], errors="coerce")
+            parsed = pd.to_datetime(dataframe[column], errors="coerce", dayfirst=True)
             score = float(parsed.notna().mean())
             if score > best_score:
                 best_score = score

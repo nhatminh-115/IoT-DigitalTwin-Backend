@@ -94,17 +94,7 @@ class DataFetcher:
         return self._normalize_schema(dataframe)
 
     def _normalize_schema(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Maps source columns to canonical schema.
-
-        Args:
-            dataframe: Raw DataFrame from CSV.
-
-        Returns:
-            Canonicalized DataFrame with numeric sensor columns.
-
-        Raises:
-            DataFetchError: If no valid sensor channels are found.
-        """
+        """Maps row-by-device data to canonical wide schema via pivoting."""
         dataframe = dataframe.copy()
         dataframe.columns = [str(column).strip() for column in dataframe.columns]
 
@@ -120,41 +110,100 @@ class DataFetcher:
         if dataframe.empty:
             raise DataFetchError("All timestamp values are invalid after datetime parsing.")
 
-        dataframe = dataframe.sort_values(timestamp_col).drop_duplicates(subset=[timestamp_col], keep="last")
-        dataframe = dataframe.set_index(timestamp_col)
-        dataframe.index.name = "Timestamp"
+        # Find key columns case-insensitively
+        header_lower = [col.lower() for col in dataframe.columns]
+        def get_col_name(names):
+            for name in names:
+                if name.lower() in header_lower:
+                    return dataframe.columns[header_lower.index(name.lower())]
+            return None
 
-        renamed = {}
-        for column in dataframe.columns:
-            canonical = self._canonical_sensor_name(column)
-            if canonical is not None:
-                renamed[column] = canonical
+        col_device = get_col_name(['device id', 'device', 'node id', 'node'])
+        col_temp = get_col_name(['temp', 'temperature', 'nhiệt độ'])
+        col_hum = get_col_name(['humidity', 'hum', 'độ ẩm'])
+        col_co2 = get_col_name(['eco2', 'co2'])
+        col_tvoc = get_col_name(['tvoc'])
+        col_pm1 = get_col_name(['pm 1.0', 'pm1.0', 'pm 1', 'pm1'])
+        col_pm25 = get_col_name(['pm 2.5', 'pm2.5', 'pm 25', 'pm25'])
+        col_pm10 = get_col_name(['pm 10', 'pm10'])
 
-        if not renamed:
-            raise DataFetchError(
-                "No valid sensor channels were found. Expected module-feature columns "
-                "for M1, M4, M6-M11 with Temp, Humid, CO2, TVOC."
-            )
+        if not col_device:
+            raise DataFetchError("Device/Node ID column is missing.")
+
+        # Rename columns to standardized keys
+        renamed = {col_device: 'Device'}
+        metrics_found = []
+        
+        if col_temp: renamed[col_temp] = 'Temp'; metrics_found.append('Temp')
+        if col_hum: renamed[col_hum] = 'Hum'; metrics_found.append('Hum')
+        if col_co2: renamed[col_co2] = 'CO2'; metrics_found.append('CO2')
+        if col_tvoc: renamed[col_tvoc] = 'TVOC'; metrics_found.append('TVOC')
+        if col_pm1: renamed[col_pm1] = 'PM1'; metrics_found.append('PM1')
+        if col_pm25: renamed[col_pm25] = 'PM25'; metrics_found.append('PM25')
+        if col_pm10: renamed[col_pm10] = 'PM10'; metrics_found.append('PM10')
 
         dataframe = dataframe.rename(columns=renamed)
-        dataframe = dataframe[list(renamed.values())]
-        dataframe = dataframe.loc[:, ~dataframe.columns.duplicated()].copy()
+        dataframe = dataframe[['Device'] + metrics_found]
 
-        for column in dataframe.columns:
-            dataframe[column] = self._to_numeric_series(dataframe[column])
+        # Normalize numeric metrics
+        for m in metrics_found:
+            dataframe[m] = dataframe[m].astype(str).str.strip().str.replace(',', '.', regex=False)
+            dataframe[m] = pd.to_numeric(dataframe[m], errors='coerce')
 
-        if dataframe.empty:
-            raise DataFetchError("No rows remained after schema normalization.")
+        # Normalize Device IDs (e.g. 'esp09' -> 'M9')
+        def norm_device(raw):
+            if not isinstance(raw, str):
+                raw = str(raw)
+            s = raw.strip().lower()
+            digits = "".join([c for c in s if c.isdigit()])
+            if digits:
+                return f"M{int(digits)}"
+            return raw.upper()
 
-        return dataframe
+        dataframe['Device'] = dataframe['Device'].apply(norm_device)
+        dataframe = dataframe[dataframe['Device'].str.startswith('M')]
+        
+        # Keep only M1 to M16
+        dataframe['DeviceNum'] = dataframe['Device'].str[1:].astype(int)
+        dataframe = dataframe[(dataframe['DeviceNum'] >= 1) & (dataframe['DeviceNum'] <= 16)]
+
+        # Pivot to wide format: Index is timestamp, Columns are Device
+        pivoted = dataframe.pivot_table(
+            index=timestamp_col,
+            columns='Device',
+            values=metrics_found,
+            aggfunc='last'
+        )
+
+        if pivoted.empty:
+            raise DataFetchError("No valid rows remained after pivoting data.")
+
+        # Flatten multiindex columns: (Metric, Device) -> "Device_Metric"
+        # Standardize "Hum" to "Humid" to keep compatibility with ML code
+        flat_cols = []
+        for metric, device in pivoted.columns:
+            feat_name = metric
+            if metric == 'Hum':
+                feat_name = 'Humid'
+            flat_cols.append(f"{device}_{feat_name}")
+        pivoted.columns = flat_cols
+
+        # Resample to 3-minute intervals to align timestamps and downsample
+        pivoted = pivoted.resample('3min').mean()
+        
+        # Interpolate missing values
+        pivoted = pivoted.interpolate(method='linear', limit_direction='both')
+        pivoted = pivoted.ffill().bfill()
+        
+        if pivoted.empty or pivoted.shape[1] == 0:
+            raise DataFetchError("Pivoted DataFrame is empty.")
+
+        pivoted.index.name = "Timestamp"
+        return pivoted
 
     @staticmethod
     def _find_timestamp_column(dataframe: pd.DataFrame) -> str | None:
-        """Finds the best timestamp column by parseability and naming heuristics.
-
-        The method first filters columns whose names semantically suggest time,
-        then selects the candidate with the highest datetime parse success ratio.
-        """
+        """Finds the best timestamp column by parseability and naming heuristics."""
         columns = [str(column).strip() for column in dataframe.columns]
         lower_cols = [column.lower() for column in columns]
 
@@ -180,42 +229,3 @@ class DataFetcher:
         if best_score <= 0.0:
             return None
         return best_col
-
-    @staticmethod
-    def _to_numeric_series(series: pd.Series) -> pd.Series:
-        """Converts mixed-format sensor values into numeric dtype.
-
-        Handles locale decimal commas (e.g., "28,7") and string sentinels such as
-        "unknown" by coercing invalid values to NaN.
-        """
-        normalized = (
-            series.astype(str)
-            .str.strip()
-            .str.replace(",", ".", regex=False)
-            .replace({"unknown": pd.NA, "Unknown": pd.NA, "nan": pd.NA, "None": pd.NA})
-        )
-        return pd.to_numeric(normalized, errors="coerce")
-
-    def _canonical_sensor_name(self, raw_name: str) -> str | None:
-        """Converts heterogeneous labels into canonical `M#_Feature` names."""
-        tokenized = re.sub(r"[^A-Za-z0-9]", "", str(raw_name).upper())
-
-        module_match = re.search(r"M(?:10|11|1|4|6|7|8|9)", tokenized)
-        feature_match = re.search(r"TEMP|HUMID|HUM|CO2|TVOC", tokenized)
-
-        if module_match is None or feature_match is None:
-            return None
-
-        module = module_match.group(0)
-        feature = feature_match.group(0)
-
-        if module not in self._MODULES or feature not in self._FEATURES:
-            return None
-
-        if feature in {"CO2", "TVOC"}:
-            feature_name = feature
-        elif feature in {"HUM", "HUMID"}:
-            feature_name = "Humid"
-        else:
-            feature_name = feature.title()
-        return f"{module}_{feature_name}"

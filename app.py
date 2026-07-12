@@ -21,9 +21,7 @@ from src.iot_digital_twin.predictor import DeepTimeSeriesPredictor, PredictorCon
 from src.iot_digital_twin import weather_client
 
 
-CSV_URL = (
-    "https://docs.google.com/spreadsheets/d/e/2PACX-1vSnBhE8u7fdXKEooOlqgGYtSZLeUxrQUu9e_q6MnMrGbakxXESMYVf0utORhEG3pEqWffGhX6J-V2cC/pub?output=csv"
-)
+CSV_URL = "https://docs.google.com/spreadsheets/d/14IzHU0wQiuLeE4kTol4f1nwYimzFjy0znqLCW6p0mvI/export?format=csv&gid=0"
 MODEL_CHECKPOINT_PATH = Path("artifacts") / "lstm_checkpoint.pt"
 PREDICTION_LOG_PATH = Path("artifacts") / "prediction_log.csv"
 

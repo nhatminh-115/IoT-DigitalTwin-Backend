@@ -36,11 +36,7 @@ RETENTION_DAYS = 7
 HF_ASSET_REPO  = "Nhatminh1234/iot-campus-assets"
 HF_VIDEO_PREFIX = "videos/"
 
-CSV_URL = (
-    "https://docs.google.com/spreadsheets/d/e/"
-    "2PACX-1vSnBhE8u7fdXKEooOlqgGYtSZLeUxrQUu9e_q6MnMrGbakxXESMYVf0utORhEG3pEqWffGhX6J-V2cC"
-    "/pub?output=csv"
-)
+CSV_URL = "https://docs.google.com/spreadsheets/d/14IzHU0wQiuLeE4kTol4f1nwYimzFjy0znqLCW6p0mvI/export?format=csv&gid=0"
 
 _METRIC_META   = viz_engine.METRIC_META
 _METRIC_VRANGE: dict[str, tuple[float, float]] = {

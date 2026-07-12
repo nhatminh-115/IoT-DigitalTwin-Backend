@@ -18,9 +18,7 @@ from src.iot_digital_twin.api_service import ApiServiceConfig, ApiServiceError, 
 from src.iot_digital_twin import viz_engine
 
 
-CSV_URL = (
-    "https://docs.google.com/spreadsheets/d/e/2PACX-1vSnBhE8u7fdXKEooOlqgGYtSZLeUxrQUu9e_q6MnMrGbakxXESMYVf0utORhEG3pEqWffGhX6J-V2cC/pub?output=csv"
-)
+CSV_URL = "https://docs.google.com/spreadsheets/d/14IzHU0wQiuLeE4kTol4f1nwYimzFjy0znqLCW6p0mvI/export?format=csv&gid=0"
 CHECKPOINT_PATH = Path("artifacts") / "lstm_checkpoint.pt"
 
 logger = logging.getLogger(__name__)

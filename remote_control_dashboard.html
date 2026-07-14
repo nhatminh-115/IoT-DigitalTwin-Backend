@@ -148,18 +148,18 @@
         }
 
         .settings-panel {
-            width: 320px;
+            width: 260px;
             background: var(--panel-bg);
             border: 1px solid var(--panel-border);
             border-radius: 18px;
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             box-shadow: 0 15px 40px rgba(0, 0, 0, 0.6);
-            padding: 1.5rem;
+            padding: 1.25rem;
             margin-top: 10px;
             display: flex;
             flex-direction: column;
-            gap: 1.2rem;
+            gap: 1rem;
             pointer-events: auto;
             opacity: 0;
             transform: translateY(-20px) scale(0.95);
@@ -167,8 +167,7 @@
             visibility: hidden;
         }
 
-        /* Hover flow open panel */
-        .settings-container:hover .settings-panel,
+        /* Click flow open panel */
         .settings-container.keep-open .settings-panel {
             opacity: 1;
             transform: translateY(0) scale(1);
@@ -177,42 +176,13 @@
 
         /* Header Style inside settings */
         .settings-header {
-            font-size: 1.05rem;
+            font-size: 1rem;
             font-weight: 600;
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             padding-bottom: 0.5rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
-        }
-
-        .input-group {
-            display: flex;
-            flex-direction: column;
-            gap: 0.4rem;
-        }
-
-        label {
-            color: var(--text-muted);
-            font-weight: 600;
-            text-transform: uppercase;
-            font-size: 0.7rem;
-            letter-spacing: 0.5px;
-        }
-
-        input {
-            background: rgba(0, 0, 0, 0.5);
-            border: 1px solid var(--panel-border);
-            color: #fff;
-            padding: 0.65rem 0.8rem;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            transition: border-color 0.2s;
-        }
-
-        input:focus {
-            outline: none;
-            border-color: var(--primary);
         }
 
         /* Interactive Switches */
@@ -287,10 +257,10 @@
             background: rgba(255,255,255,0.05);
             border: 1px solid rgba(255,255,255,0.08);
             color: #fff;
-            padding: 0.65rem 1rem;
+            padding: 0.6rem 0.8rem;
             border-radius: 8px;
             font-weight: 600;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             cursor: pointer;
             transition: all 0.2s;
             text-align: center;
@@ -365,48 +335,6 @@
         .edit-banner.visible {
             display: flex;
         }
-
-        /* Placeholder UI for empty VDO.ninja */
-        .placeholder-ui {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: var(--bg-dark);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 0;
-            text-align: center;
-            padding: 2rem;
-        }
-
-        .placeholder-card {
-            background: rgba(15, 20, 40, 0.7);
-            border: 1px solid var(--panel-border);
-            border-radius: 20px;
-            padding: 2.5rem;
-            max-width: 500px;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
-            backdrop-filter: blur(10px);
-        }
-
-        .placeholder-card h2 {
-            font-weight: 800;
-            margin-bottom: 0.8rem;
-            background: linear-gradient(135deg, #fff, #818cf8);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .placeholder-card p {
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            margin-bottom: 1.5rem;
-            line-height: 1.5;
-        }
     </style>
 </head>
 <body>
@@ -433,38 +361,17 @@
             <div class="interactive-target play-mode" data-id="chart" onclick="triggerCommand('chart')">Chart</div>
         </div>
 
-        <!-- Default Placeholder when no stream ID is entered -->
-        <div id="stream-placeholder" class="placeholder-ui">
-            <div class="placeholder-card">
-                <h2>Cần Cấu Hình Đường Truyền</h2>
-                <p>Ứng dụng điều khiển từ xa chưa được kết nối với VDO.Ninja stream của bạn. Vui lòng di chuột vào biểu tượng cài đặt ⚙️ ở góc trên bên phải để bắt đầu thiết lập.</p>
-                <button class="btn btn-primary" onclick="openSettingsPanel()">Cấu Hình Ngay</button>
-            </div>
-        </div>
-
         <iframe id="stream-frame" src="" allow="autoplay; encrypted-media; fullscreen"></iframe>
     </div>
 
     <!-- Floating Settings Controls -->
     <div id="settings-container" class="settings-container">
-        <div class="settings-trigger">⚙️</div>
+        <div class="settings-trigger" onclick="toggleSettingsPanel()">⚙️</div>
         
         <div class="settings-panel">
             <div class="settings-header">
-                <span>Thiết lập Hệ thống</span>
+                <span>Cài Đặt Nút Bấm</span>
                 <div id="status-dot" class="status-dot"></div>
-            </div>
-
-            <!-- VDO.Ninja ID Input -->
-            <div class="input-group">
-                <label for="ninja-id">VDO.Ninja View ID</label>
-                <input type="text" id="ninja-id" placeholder="ví dụ: xxxxxxx" value="">
-            </div>
-
-            <!-- API Backend URL Input -->
-            <div class="input-group">
-                <label for="backend-url">API Backend URL</label>
-                <input type="text" id="backend-url" placeholder="http://127.0.0.1:5000" value="">
             </div>
 
             <!-- Layout Drag & Drop Editor Toggle -->
@@ -478,8 +385,8 @@
 
             <!-- Action buttons -->
             <div class="btn-group">
-                <button class="btn" onclick="resetPositions()">Reset Nút</button>
-                <button class="btn btn-primary" onclick="saveConfiguration()">Lưu Thiết Lập</button>
+                <button class="btn" onclick="resetPositions()">Đặt Lại</button>
+                <button class="btn btn-primary" onclick="toggleSettingsPanel()">Xong</button>
             </div>
 
             <div class="status-widget">
@@ -489,6 +396,9 @@
     </div>
 
     <script>
+        // Hardcoded VDO.Ninja View ID
+        const hardcodedNinjaId = '79KvXK2';
+
         // Default relative positions for buttons (stack vertically on left side where Unity sidebar is)
         const DEFAULT_POSITIONS = {
             home:    { x: 1.0, y: 10.0 },
@@ -507,33 +417,43 @@
         let draggedElement = null;
         let dragOffset = { x: 0, y: 0 };
         let buttonPositions = {};
+        let backendUrl = '';
+
+        // Auto-rotation variables
+        let autoRotateInterval = null;
+        let currentRotateIndex = 0;
+        const rotateMetrics = ["home", "temp", "hum", "co2", "tvoc", "pm1", "pm25", "pm10"];
+        let lastInteractionTime = Date.now();
 
         document.addEventListener('DOMContentLoaded', () => {
-            // Load credentials
-            const savedNinjaId = localStorage.getItem('remote_ninja_id') || '';
-            
             // Dynamic resolution: if no saved URL, use the current domain.
-            // If running inside HF spaces, this resolves to https://nhatminh1234-iot-digitaltwin-backend.hf.space
-            const defaultUrl = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
+            const defaultUrl = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1') || window.location.origin.startsWith('file://')
                 ? 'http://127.0.0.1:5000'
                 : window.location.origin;
 
-            const savedBackendUrl = localStorage.getItem('remote_backend_url') || defaultUrl;
+            backendUrl = localStorage.getItem('remote_backend_url') || defaultUrl;
             
-            document.getElementById('ninja-id').value = savedNinjaId;
-            document.getElementById('backend-url').value = savedBackendUrl;
-
             // Load button layout positions
             loadButtonPositions();
 
             // Set up drag-and-drop listeners
             setupDraggableButtons();
 
-            if (savedNinjaId) {
-                updateStreamSource(savedNinjaId);
-                checkBackendConnection(savedBackendUrl);
-            }
+            // Always update stream source with hardcoded ID
+            updateStreamSource();
+            
+            // Test connection
+            checkBackendConnection(backendUrl);
+
+            // Start auto-rotation
+            startAutoRotation();
         });
+
+        // Toggle settings panel open/closed
+        function toggleSettingsPanel() {
+            const container = document.getElementById('settings-container');
+            container.classList.toggle('keep-open');
+        }
 
         // Toggle editor edit mode
         function toggleEditMode(checked) {
@@ -558,48 +478,11 @@
             }
         }
 
-        // Open settings panel by showing class keep-open
-        function openSettingsPanel() {
-            const container = document.getElementById('settings-container');
-            container.classList.add('keep-open');
-            // Remove it when mouse leaves the panel
-            container.addEventListener('mouseleave', function handleLeave() {
-                container.classList.remove('keep-open');
-                container.removeEventListener('mouseleave', handleLeave);
-            });
-        }
-
-        // Save current stream settings and check connection
-        function saveConfiguration() {
-            const ninjaId = document.getElementById('ninja-id').value.trim();
-            const backendUrl = document.getElementById('backend-url').value.trim();
-
-            localStorage.setItem('remote_ninja_id', ninjaId);
-            localStorage.setItem('remote_backend_url', backendUrl);
-
-            updateStreamSource(ninjaId);
-            checkBackendConnection(backendUrl);
-
-            // Turn off edit mode
-            document.getElementById('edit-mode-toggle').checked = false;
-            toggleEditMode(false);
-            
-            setStatus('Đã lưu cấu hình!', 'active');
-        }
-
         // Load stream source in iframe
-        function updateStreamSource(ninjaId) {
+        function updateStreamSource() {
             const frame = document.getElementById('stream-frame');
-            const placeholder = document.getElementById('stream-placeholder');
-
-            if (ninjaId) {
-                placeholder.style.display = 'none';
-                // Premium clean VDO.Ninja parameters: transparent bg, hide control bar, autoplay, HD 1080p, 8mbps
-                frame.src = `https://vdo.ninja/?view=${ninjaId}&autoplay=1&mute=1&clean=1&transparent=1&nomenu=1&nocontrols=1&noheader=1&hd=1&scale=100&bitrate=8000`;
-            } else {
-                placeholder.style.display = 'flex';
-                frame.src = '';
-            }
+            // Premium clean VDO.Ninja parameters: transparent bg, hide control bar, autoplay, HD 1080p, 8mbps
+            frame.src = `https://vdo.ninja/?view=${hardcodedNinjaId}&autoplay=1&mute=1&clean=1&transparent=1&nomenu=1&nocontrols=1&noheader=1&hd=1&scale=100&bitrate=8000`;
         }
 
         // Test backend API URL
@@ -630,8 +513,14 @@
         function triggerCommand(metric) {
             if (isEditMode) return; // Prevent clicking while dragging
             
-            const backendUrl = document.getElementById('backend-url').value.trim().replace(/\/$/, "");
-            if (!backendUrl) return;
+            // Reset the auto-rotation idle timer on manual interaction
+            resetRotationTimer();
+
+            // Align rotation index so rotation resumes from here
+            const idx = rotateMetrics.indexOf(metric);
+            if (idx !== -1) {
+                currentRotateIndex = idx;
+            }
 
             setStatus(`Đang chuyển: ${metric.toUpperCase()}...`, 'active');
 
@@ -749,6 +638,46 @@
                 applyLoadedPositions();
                 setStatus('Đã reset vị trí nút!', 'active');
             }
+        }
+
+        // Start auto-rotation timer loop
+        function startAutoRotation() {
+            if (autoRotateInterval) clearInterval(autoRotateInterval);
+            autoRotateInterval = setInterval(() => {
+                // Do not rotate if in edit mode
+                if (isEditMode) return;
+                
+                // Do not rotate if settings panel is open
+                const container = document.getElementById('settings-container');
+                if (container.classList.contains('keep-open')) return;
+                
+                // Do not rotate if the user interacted manually in the last 30s
+                if (Date.now() - lastInteractionTime < 30000) return;
+                
+                // Increment and cycle
+                currentRotateIndex = (currentRotateIndex + 1) % rotateMetrics.length;
+                const nextMetric = rotateMetrics[currentRotateIndex];
+                
+                // Send rotation command
+                sendAutoRotationCommand(nextMetric);
+            }, 30000); // Trigger check every 30 seconds
+        }
+
+        function resetRotationTimer() {
+            lastInteractionTime = Date.now();
+        }
+
+        function sendAutoRotationCommand(metric) {
+            if (!backendUrl) return;
+            setStatus(`Xoay vòng tự động: ${metric.toUpperCase()}...`, 'active');
+            fetch(`${backendUrl}/api/command`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ metric: metric })
+            })
+            .catch(err => {
+                // Ignore errors during auto-rotation to keep stream stable
+            });
         }
     </script>
 </body>

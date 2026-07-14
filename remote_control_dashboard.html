@@ -481,8 +481,7 @@
         // Load stream source in iframe
         function updateStreamSource() {
             const frame = document.getElementById('stream-frame');
-            // Premium clean VDO.Ninja parameters: transparent bg, hide control bar, autoplay, HD 1080p, 8mbps
-            frame.src = `https://vdo.ninja/?view=${hardcodedNinjaId}&autoplay=1&mute=1&clean=1&transparent=1&nomenu=1&nocontrols=1&noheader=1&hd=1&scale=100&bitrate=8000`;
+            frame.src = `https://vdo.ninja/?view=${hardcodedNinjaId}&autoplay=1&mute=1&autostart=1&playsinline=1&forceturn=1&codec=h264&clean=1&transparent=1&nomenu=1&nocontrols=1&noheader=1&hd=1&scale=100&bitrate=8000`;
         }
 
         // Test backend API URL

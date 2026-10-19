@@ -8,7 +8,7 @@
 
 From repository root after installing dependencies from `requirements.txt`:
 
-~~~bash
+```bash
 # Terminal 1: inference API and combined bot/alert loops (default APP_MODE)
 python -m uvicorn api_server:app --host 0.0.0.0 --port 8000
 
@@ -17,17 +17,17 @@ python -m streamlit run app.py --server.port 8503
 
 # Optional, separate MQTT bridge; requires HiveMQ and Supabase credentials
 python mqtt_worker.py
-~~~
+```
 
 Direct API examples:
 
-~~~bash
+```bash
 curl http://localhost:8000/health
 curl http://localhost:8000/latest
 curl "http://localhost:8000/predict/latest?module=M1"
 curl "http://localhost:8000/unity/predict?module=M1"
 curl http://localhost:8000/unity/predict/all
-~~~
+```
 
 `APP_MODE` defaults to `combined`. If running more than one local API instance with `combined`, each can start its own Telegram polling and side-effect loops; this is not the intended single-owner production layout.
 
@@ -90,12 +90,12 @@ Port `8001` is used to keep a worker process alive and import the service; it is
 
 Suggested checks for an incident:
 
-~~~bash
+```bash
 curl -sS http://localhost:8000/health
 curl -sS http://localhost:8000/latest
 curl -sS "http://localhost:8000/unity/predict?module=M1"
 curl -sS http://localhost:8000/command
-~~~
+```
 
 In a hosted environment, substitute `http://<host>:7860/api` for `http://localhost:8000`. Compare `last_fetch_utc`, response timestamps and the expected sensor update cadence; a green health status alone does not guarantee newest telemetry.
 

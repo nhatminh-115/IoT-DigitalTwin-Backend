@@ -6,7 +6,7 @@
 
 This is a Python-based environmental digital-twin backend with two independent ways of receiving telemetry. The **model-serving pipeline consumes a published Google Sheets CSV**, while the **MQTT ingestion worker writes independently to Supabase**. It provides a Streamlit dashboard, FastAPI REST service for Unity/external clients, Telegram reporting/alerts, an optional Groq-assisted question-answering path, and optional daily heatmap videos and weather cross-checks.
 
-~~~mermaid
+```mermaid
 flowchart LR
   HA["Home Assistant / upstream automation<br/>(documented; code outside repo)"] --> GS["Google Sheets CSV export"]
   GS --> API["FastAPI + InferenceAPIService"]
@@ -24,7 +24,7 @@ flowchart LR
 
   style GS fill:#eef
   style DB fill:#fee
-~~~
+```
 
 **Critical non-connection:** the MQTT/Supabase `env_readings` path does **not** feed `InferenceAPIService`, the LSTM, or the Streamlit dashboard in this implementation. The original README documents Home Assistant publishing on an approximately 3-minute cadence; that upstream publisher's code is not present here. Diagram edges describe code paths or explicitly attributed external integrations, not monitored production uptime.
 
@@ -51,7 +51,7 @@ flowchart LR
 
 The committed Dockerfile uses Python 3.10, installs dependencies, copies source, and starts Supervisor. Supervisor launches five process groups within the **same container**:
 
-~~~mermaid
+```mermaid
 flowchart TB
   Client["Browser / REST / Unity consumer"] --> NG["Nginx :7860"]
   NG -->|"/"| ST["Streamlit :8501<br/>app.py"]
@@ -67,7 +67,7 @@ flowchart TB
   WK --> Files
   ST --> Files
   MQ --> Supa[("Supabase env_readings")]
-~~~
+```
 
 **Exact routing:** `nginx.conf` listens on port **7860**. `/api/` proxies to Uvicorn port **8000** with the `/api/` prefix removed; `/` proxies to Streamlit port **8501** with WebSocket forwarding. Local development examples instead run Uvicorn directly on 8000 and Streamlit separately on 8503. `:8001` runs the designated worker's Uvicorn process but is not exposed by Nginx.
 

@@ -18,6 +18,10 @@ Backend service, real-time forecasting dashboard, and AI assistant for the UEH C
 - MQTT worker → Supabase integration
 - Telegram bot command handler
 
+## Detailed architecture documentation
+
+For the **as-implemented** system architecture, deployment topology, Mermaid sequence diagrams, data/Unity/API contracts, and operational caveats, see **[docs/README.md](docs/README.md)**. These code-grounded documents also distinguish the primary Google Sheets forecast path from the independent MQTT → Supabase ingestion path.
+
 ## Architecture Overview
 
 ```

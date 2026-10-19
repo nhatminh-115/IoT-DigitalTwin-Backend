@@ -50,11 +50,11 @@ The normalizer maps digit-bearing device IDs such as `esp09` → `M9`, keeps dev
 
 Illustrative input:
 
-~~~csv
+```csv
 Timestamp,Device ID,Temp,Humidity,eCO2,TVOC
 2026-10-19 08:00:00,esp09,28.2,68,450,20
 2026-10-19 08:00:00,esp01,27.4,65,420,17
-~~~
+```
 
 Illustrative normalized columns: `M9_Temp`, `M9_Humid`, `M9_CO2`, `M9_TVOC`, `M1_Temp`, `M1_Humid`, `M1_CO2`, `M1_TVOC`.
 
@@ -62,7 +62,7 @@ Illustrative normalized columns: `M9_Temp`, `M9_Humid`, `M9_CO2`, `M9_TVOC`, `M1
 
 `GET /latest` returns a **flat dictionary** whose keys are `Timestamp` and sensor channels. Numeric channel values are formatted to **two decimal places as strings** and `_Humid` is renamed to `_Hum` for legacy Unity compatibility.
 
-~~~json
+```json
 {
   "Timestamp": "2026-10-19 08:00:00",
   "M1_Temp": "27.40",
@@ -70,11 +70,11 @@ Illustrative normalized columns: `M9_Temp`, `M9_Humid`, `M9_CO2`, `M9_TVOC`, `M1
   "M1_CO2": "420.00",
   "M1_TVOC": "17.00"
 }
-~~~
+```
 
 Historical endpoints (`/latest_hour`, `/latest_day`, `/latest_7_days`) return:
 
-~~~json
+```json
 {
   "date": "2026-10-19",
   "count": 1,
@@ -88,7 +88,7 @@ Historical endpoints (`/latest_hour`, `/latest_day`, `/latest_7_days`) return:
     }
   ]
 }
-~~~
+```
 
 These history rows carry **time-of-day only** in `created` plus one outer `date` (the latest frame date), so that legacy shape is potentially ambiguous across multi-day histories. Clients requiring fully qualified per-row timestamps should not infer them from `created` without an independent date rule.
 
@@ -96,7 +96,7 @@ These history rows carry **time-of-day only** in `created` plus one outer `date`
 
 `GET /predict/latest?module=M1` filters canonical channel names to the chosen prefix. No filter returns all channels. Values are JSON numeric fields; unlike `/latest`, forecasts are **not converted to 2-decimal strings**.
 
-~~~json
+```json
 {
   "forecast_issue_time": "2026-10-19T08:00:00",
   "forecast_target_time": "2026-10-19T08:03:00",
@@ -114,7 +114,7 @@ These history rows carry **time-of-day only** in `created` plus one outer `date`
     }
   }
 }
-~~~
+```
 
 Times are derived from the cleaned DataFrame's timestamps; the code does not unconditionally attach UTC offsets to these timestamp strings. Consumers should **not assume the timestamp is UTC merely because it is ISO formatted**. The next step is the median observed interval (typically 3 minutes).
 
@@ -122,7 +122,7 @@ Times are derived from the cleaned DataFrame's timestamps; the code does not unc
 
 `GET /unity/predict?module=M1` wraps the same inference in a feature-centric form compatible with C# `JsonUtility`:
 
-~~~json
+```json
 {
   "module": "M1",
   "forecast_issue_time": "2026-10-19T08:00:00",
@@ -135,7 +135,7 @@ Times are derived from the cleaned DataFrame's timestamps; the code does not unc
     {"name": "Humid", "current": 65.0, "predicted": 64.8, "delta": -0.2}
   ]
 }
-~~~
+```
 
 The included [UnityInferenceClient.cs](../unity_integration/UnityInferenceClient.cs) deserializes `module`, issue/target times and `features[]`; it does **not** require direct deserialization of the three dictionaries. `UnityInferenceUIBinder.cs` looks up `Temp`/`Humid`/`CO2`/`TVOC` and renders current, prediction and delta.
 
@@ -145,7 +145,7 @@ The included [UnityInferenceClient.cs](../unity_integration/UnityInferenceClient
 
 `POST /command` accepts JSON and extracts `metric`; if omitted it defaults to `home`. **It does not validate a strict command enumeration**. A successful response is an acknowledgement of storing the value in process memory, not of execution by Unity or another consumer:
 
-~~~json
+```json
 {
   "status": "success",
   "command": {
@@ -153,7 +153,7 @@ The included [UnityInferenceClient.cs](../unity_integration/UnityInferenceClient
     "timestamp": 1792371600.0
   }
 }
-~~~
+```
 
 `GET /command` returns just the stored `{"metric":"...", "timestamp":...}` object. Default at import is `{"metric":"home", "timestamp":0.0}`. With two Uvicorn API workers, POST and GET may hit different memory copies. See [limitations](OPERATIONS_AND_CAVEATS.md#known-implementation-caveats).
 
@@ -161,7 +161,7 @@ The included [UnityInferenceClient.cs](../unity_integration/UnityInferenceClient
 
 From `esp/esp09` and the JSON payload `{"t1":28.2,"h1":68,"co2":450,"tvoc":20}`, the worker constructs:
 
-~~~json
+```json
 {
   "ts": "2026-10-19T01:00:00+00:00",
   "node_id": "M9",
@@ -170,7 +170,7 @@ From `esp/esp09` and the JSON payload `{"t1":28.2,"h1":68,"co2":450,"tvoc":20}`,
   "co2": 450,
   "tvoc": 20
 }
-~~~
+```
 
 `ts` is produced by `datetime.now(timezone.utc)` in the MQTT worker (receipt time), **not taken from a sensor payload field**. `temp` and `humidity` are floating-point values; `co2` and `tvoc` are integer conversions; malformed numbers map to `null`. Unknown device topic suffixes and invalid JSON are skipped. Records are upserted to `env_readings` with conflict key `ts,node_id`. This describes the **writer's expected table contract**, not an independently verified Supabase database migration/schema.
 
@@ -178,7 +178,7 @@ From `esp/esp09` and the JSON payload `{"t1":28.2,"h1":68,"co2":450,"tvoc":20}`,
 
 FastAPI handlers register a structured error envelope:
 
-~~~json
+```json
 {
   "error": {
     "code": "DATA_SOURCE_UNAVAILABLE",
@@ -186,7 +186,7 @@ FastAPI handlers register a structured error envelope:
     "trace_id": "illustrative-trace-id"
   }
 }
-~~~
+```
 
 | Typical condition | HTTP status | Error code |
 |---|---|---|

@@ -6,7 +6,7 @@
 
 The repository README says an external Home Assistant automation exports sensor readings into a Google Sheet about every three minutes. That publisher is outside this repository. The implemented model pipeline begins at the **Google Sheets CSV export**, not at Supabase.
 
-~~~mermaid
+```mermaid
 sequenceDiagram
   autonumber
   participant HA as Home Assistant (external)
@@ -31,7 +31,7 @@ sequenceDiagram
     M->>FS: Read or write LSTM checkpoint
     B->>C: Replace process-local cached_clean_df
   end
-~~~
+```
 
 **Transformation detail:** `DataFetcher` identifies a timestamp column and a device identifier (for example `esp09` → `M9`), accepts common temperature/humidity/eCO2/TVOC names and optional particulate matter fields, converts readings to numbers, pivots long per-device rows to a timestamp-indexed wide frame, creates canonical names (for example `M9_Temp`, `M9_Humid`, `M9_CO2`, `M9_TVOC`), resamples to **3-minute bins using the mean**, then interpolates/fills. The alias `eCO2` is accepted and renamed to `CO2`; this is **column naming, not proof of a direct CO2 sensor**.
 
@@ -45,7 +45,7 @@ The `DataQualityGate` requires at least 40 rows, flags low-variance rolling wind
 
 The predictor is **multivariate**: one model consumes all currently available cleaned feature channels. It differences consecutive observations, standardizes each difference channel, feeds the last **20 differenced steps** to a two-layer LSTM (hidden size 128, dropout 0.15), predicts the next standardized difference vector, then converts back to original units by adding the last observed absolute vector. `forecast_target_time` is inferred from the median positive sampling interval, falling back to 3 minutes.
 
-~~~mermaid
+```mermaid
 sequenceDiagram
   autonumber
   participant U as UnityInferenceClient.cs
@@ -65,7 +65,7 @@ sequenceDiagram
   U->>U: JsonUtility.FromJson + OnPredictionUpdated
   U->>U: UI binder updates TextMeshPro
   Note over U: Client default poll interval = 180 s
-~~~
+```
 
 When using local port `8000` without Nginx, Unity requests `/unity/predict` directly; when using published Nginx port `7860`, the client base URL must include `/api`. `UnityInferenceClient.cs` defaults to localhost:8000 and polls every **180 seconds**; its UI binder subscribes to success/error events. The code also exposes `/unity/predict/all` so a different consumer can obtain all modules in one request.
 
@@ -75,7 +75,7 @@ The handler is not a server-pushed real-time stream: **Unity pulls a snapshot**.
 
 The dashboard is **not a presentation-only frontend to the FastAPI service**. It directly constructs its own fetcher, quality gate, evaluator and session-state predictor. On each Streamlit run/refresh (default **180 seconds**, adjustable), it fetches the CSV, cleans data, loads or trains its own model, predicts one next step, generates historical MC-dropout forecasts, computes residual/MAE/RMSE charts and stores a prediction log.
 
-~~~mermaid
+```mermaid
 flowchart LR
   Browser["Browser"] --> Streamlit["app.py / Streamlit :8501 hosted<br/>or :8503 local"]
   Streamlit --> GS["Google Sheets CSV"]
@@ -86,7 +86,7 @@ flowchart LR
   P --> Log[("artifacts/prediction_log.csv")]
   Eval --> Browser
   Log --> Browser
-~~~
+```
 
 The dashboard trains from a tail of **720 rows**, whereas the API service uses **1200 rows**; both may read/write the same checkpoint path. The local log appends predicted values and later reconciles them with observed ground truth. Its `/` URL is routed to Streamlit by Nginx; API traffic goes to `/api/`. The dashboard weather strip independently obtains weather context.
 
@@ -94,7 +94,7 @@ The dashboard trains from a tail of **720 rows**, whereas the API service uses *
 
 Only a process running `APP_MODE=combined` or `APP_MODE=worker` starts the Telegram long-polling thread. Incoming `getUpdates` responses are dispatched to status, chart, heatmap, rank, comparison, forecast, video or `/ask` handlers. Most commands use the in-memory clean data frame rather than a database query.
 
-~~~mermaid
+```mermaid
 sequenceDiagram
   autonumber
   participant Chat as Telegram user
@@ -118,7 +118,7 @@ sequenceDiagram
   Worker->>TG: sendMessage(answer)
   Worker-->>DB: Optional bot_logs insert
   TG-->>Chat: Answer
-~~~
+```
 
 `AIAssistant` uses Groq's `llama-3.3-70b-versatile` if `GROQ_API_KEY` is configured. Before calling the model, `SheetContextFetcher` builds bounded context from the **worker process's cached clean DataFrame**, detects current/trend/today/module-status intent, checks active/frozen nodes, and formats a recent data table. `SemanticCache` keeps fuzzy-matched answers for five minutes. The implementation does **not** perform retrieval from the Supabase `env_readings` table.
 
@@ -130,7 +130,7 @@ sequenceDiagram
 
 This is a **separate ingestion pipeline**, not a replacement model feed. `mqtt_worker.py` reads broker credentials and a Supabase **service key** at startup. It subscribes to `esp/+` at QoS 1 over TLS, parses JSON from known ESP topics, converts measurements, adds a server-side UTC timestamp, queues records in memory, then periodically upserts batches into `env_readings`.
 
-~~~mermaid
+```mermaid
 sequenceDiagram
   autonumber
   participant ESP as ESP sensor (outside repo)
@@ -150,7 +150,7 @@ sequenceDiagram
       MQTT->>Q: Best-effort requeue; may drop if full
     end
   end
-~~~
+```
 
 Eight explicit mappings are supported: `esp01→M1`, `esp04→M4`, `esp06→M6`, `esp07→M7`, `esp08→M8`, `esp09→M9`, `esp10→M10`, `esp11→M11`. Example fields are `t1` (Temp), `h1` (Humidity), `co2` and `tvoc`. Unknown devices/bad JSON are skipped; nonnumeric values become null. Default queue maximum is 10,000 records; batch size 100; flush interval 30 seconds. The worker attempts a final drain at shutdown. MQTT QoS 1 provides broker-level delivery semantics, but the in-memory queue/retry implementation does **not** guarantee end-to-end exactly-once or lossless persistence. `ts` represents worker receipt, not necessarily physical measurement time.
 
@@ -160,7 +160,7 @@ Eight explicit mappings are supported: `esp01→M1`, `esp04→M4`, `esp06→M6`,
 
 `remote_control_dashboard.html` embeds a video stream and sends `POST /api/command` with `{"metric": "..."}` through Nginx, plus `GET /api/command` for a connectivity check. In `api_server.py` the POST handler writes a module-level Python dictionary `latest_command` with a metric and server timestamp; GET returns it.
 
-~~~mermaid
+```mermaid
 sequenceDiagram
   participant UI as Remote control HTML
   participant N as Nginx /api/command
@@ -173,7 +173,7 @@ sequenceDiagram
   UI->>N: GET /api/command
   N->>A: GET /command
   A-->>UI: latest_command (of worker reached)
-~~~
+```
 
 **Important limitation:** Supervisor starts **two** Uvicorn API processes. They have independent in-memory `latest_command` values; consecutive POST and GET requests can reach different workers and disagree, and commands disappear on process restart. The repository demonstrates a producer endpoint and UI, but does not demonstrate a durable, cross-process command consumer or command-delivery acknowledgement. A consumer in another repository must not treat POST success as proof that a visualizer executed the requested change.
 
